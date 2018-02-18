@@ -1,6 +1,13 @@
 ################################################
-# sam_dsbra_interface.py -r <reference.fa> -q <sample.fastq|.fq> -b <break_index>,<margin>,<last_margin> -o <output_filename.txt> [-v] [-c]
-#
+# sam_dsbra_interface.py -r <reference.fa> -q <sample.fastq|.fq> -b <break_index>,<margin>,<last_margin> -o <output_filename.txt> [-v]
+# -r <reference.fa> - indicates the fasta-formatted reference sequence to align fastq file to
+# -q <sample.fq> - indicates fastq file for alignment to reference sequence
+# -b <break_index>, <margin>, <last_margin> - indicates the location within reference sequence where break is expected(break_index), the margin
+# 		before and after the break index that should be considered for analysis(margin), and the margin outside of the last mutagenic event that
+#		that should be analyzed (last_margin). For instance, a margin of 3 and last_margin of 5 would look at 3 positions on either side of expected
+#		break site and then an additional 5 bases beyond any mutation found within the initial margin.
+# -o <output_filename.txt> - location of tab-delimited output file for alignments
+# -v : verbose mode
 ################################################
 
 __version__ = '0.0.9'
