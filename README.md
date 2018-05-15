@@ -3,7 +3,7 @@ Double Strand Break Analysis Program
 Analyze .fastq files for insertions, deletions, and microhomologous end joining at specified break site within reference sequence.
 
 ## Run On ACCRE
-1. Clone the git repo to ACCRE and enter into the directory
+1. Clone the git repo to ACCRE and cd into the directory
 ```
 git clone https://github.com/lingchen42/dsbra.git
 cd dsbra
@@ -20,7 +20,11 @@ conda env create -n dsbra -f dsbra_conda.yml
 ```
 source activate dsbra
 ```
-5. Run the scripts, example use:
+5. Run the scripts. 
+```
+python sam_dsbra_interface.py -r <reference.fa> -q <sample.fastq|.fq> -b <break_index>,<margin>,<last_margin> -o <output_filename.txt> [-v] [-c]
+```
+example use:
 ```
 python sam_dsbra_interface.py -r example_data/nfr_ref_seq.fa -q example_data/RIF1_NFR.fastq -b 100,10,5 -o temp_out.txt
 ```
@@ -28,7 +32,7 @@ The results will be in the `temp_out.txt` file. <br>
 This python script calls the bowtie2 and samtools, therefore will also generate some other files. Those files, together with running
 information will be stored in `temp_outputs/` directory. <br>
 
-6. Finally, exit from the virtual environment
+6. Finally, exit the virtual environment
 ```
 source deactivate
 ```
