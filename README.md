@@ -3,14 +3,14 @@ Double Strand Break Analysis Program
 Analyze .fastq files for insertions, deletions, and microhomologous end joining at specified break site within reference sequence.
 
 ## Run On ACCRE
-1. Clone the git repo to ACCRE and cd into the directory
+1. Load necessary packages with LMOD.
+```
+ml Intel git Anaconda2 Bowtie2/2.3.2
+```
+2. Clone the git repo to ACCRE and cd into the directory
 ```
 git clone https://github.com/lingchen42/dsbra.git
 cd dsbra
-```
-2. Load necessary packages with LMOD.
-```
-ml Intel Anaconda2 Bowtie2/2.3.2
 ```
 3. Install dependencies within a conda virtual enviroment. (This step only needs to be done the first time.)
 ```
