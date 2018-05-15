@@ -1,8 +1,34 @@
 # dsbra
 Double Strand Break Analysis Program
-
 Analyze .fastq files for insertions, deletions, and microhomologous end joining at specified break site within reference sequence.
 
+## Run On ACCRE
+
+1. Load necessary packages with LMOD.
+```
+ml Intel Anaconda2 Bowtie2/2.3.2
+```
+2. Install dependencies within a conda virtual enviroment. (This step only needs to be done the first time.)
+```
+conda env create -n dsbra -f dsbra_conda.yml
+```
+3. Activate the virtual enviroment.
+```
+source activate dsbra
+```
+4. Run the scripts, example use:
+```
+python sam_dsbra_interface.py -r example_data/nfr_ref_seq.fa -q example_data/RIF1_NFR.fastq -b 100,10,5 -o temp_out.txt
+```
+The results will be in the `temp_out.txt` file. <br>
+This python script calls the bowtie2 and samtools, therefore will also generate some other files. Those files, together with running
+information will be stored in `temp_outputs/` directory. <br>
+5. Finally, exit from the virtual environment
+```
+source deactivate
+```
+
+## Original Documentation
 Use:
 1. Must install samtools AND bowtie2 OR bwa aligner and edit approprite paths within sam_dsbra_interface.py if not in your PATH variable.
 2. sam_dsbra_interface.py requires pysam, numpy, scipy installation prior to use

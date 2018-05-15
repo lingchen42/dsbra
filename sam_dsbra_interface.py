@@ -31,8 +31,10 @@ BOWTIE2_FOLDER = ''
 BWA_FOLDER = ''
 SAMTOOLS_FOLDER = ''
 
+TEMP_DIR = 'temp_outputs/'
+if not os.path.exists(TEMP_DIR): os.makedirs(TEMP_DIR)
 RE_FASTA = re.compile(r'\>(.*)[\n|\r]+([ACTGactg\r\n]+)')
-RUN_NAME = 'test_run'
+RUN_NAME = os.path.join(TEMP_DIR, 'test_run')
 
 SAM_FILENAME = ''
 
@@ -254,6 +256,13 @@ if __name__ == '__main__':
 	
 	VERBOSE = '-v' in sys.argv
 	
+	RUN_INFO = os.path.join(TEMP_DIR, 'run_info.txt')
+	with open(RUN_INFO, 'a') as fh:
+		fh.write('Time: %s\nWorking Directory:\n%s\nCommand:\n%s\n'\
+                  %(str(datetime.now())[:-7],
+                    os.getcwd(),
+                    ' '.join(sys.argv)))
+
 	SAM_FILENAME = fastq_name[:fastq_name.rfind('.')]+'.sam'
 
 	#Read in reference fasta, write to new file after checking filetype
@@ -308,8 +317,8 @@ if __name__ == '__main__':
 				run_metadata['alignment_settings'] = "BWA_FOLDER+'bwa mem '+RUN_NAME+'_ref.fa '+fastq_name+' > '+SAM_FILENAME"
 				subprocess.call(BWA_FOLDER+'bwa mem '+RUN_NAME+'_ref.fa '+fastq_name+' > '+SAM_FILENAME,shell=True)
 				
-			subprocess.call(SAMTOOLS_FOLDER+'samtools view -@ 8 -bS '+SAM_FILENAME+' | '+SAMTOOLS_FOLDER+'samtools sort -@ 8 - '\
-				+SAM_FILENAME+'.sorted', shell=True, stdout = out)
+			subprocess.call(SAMTOOLS_FOLDER+'samtools view -@ 8 -bS '+SAM_FILENAME+' | '+SAMTOOLS_FOLDER+'samtools sort -@ 8 -o '\
+				+SAM_FILENAME+'.sorted.bam', shell=True, stdout = out)
 			subprocess.call(SAMTOOLS_FOLDER+'samtools index '+ SAM_FILENAME + '.sorted.bam ' + SAM_FILENAME + '.sorted.bai',\
 				shell=True, stdout = out)
 				
@@ -318,10 +327,10 @@ if __name__ == '__main__':
 	#VERSION 0.0.4 -- Mutational database now incorporates 
 	#First pass on SAM/BAM file creates secondary file with all reads requiring further evaluation (non-WT within margin)
 	mut_reads_list = [ ]
-	MUT_BAMFILE_NAME = "temp_mut_reads.sam"
+	MUT_BAMFILE_NAME = os.path.join(TEMP_DIR, "temp_mut_reads.sam")
 	
 	if os.path.exists(MUT_BAMFILE_NAME):
-		print "WARNING: File \"%s\" exists."%MUT_BAMFILE_NAME
+		print "ERROR: File \"%s\" exists."%MUT_BAMFILE_NAME
 		sys.exit()
 		
 	mut_bamfile = pysam.AlignmentFile(MUT_BAMFILE_NAME,"wh", template=bamfile, reference_names=bamfile.references, reference_lengths=bamfile.lengths)
@@ -359,8 +368,8 @@ if __name__ == '__main__':
 	#Close and sort/index new bamfile
 	mut_bamfile.close()
 	with open(os.devnull, 'wb') as out:
-		subprocess.call(SAMTOOLS_FOLDER+'samtools view -@ 8 -bS '+MUT_BAMFILE_NAME+' | '+SAMTOOLS_FOLDER+'samtools sort -@ 8 - '\
-			+MUT_BAMFILE_NAME+'.sorted', shell=True, stdout = out)
+		subprocess.call(SAMTOOLS_FOLDER+'samtools view -@ 8 -bS '+MUT_BAMFILE_NAME+' | '+SAMTOOLS_FOLDER+'samtools sort -@ 8 -o '\
+			+MUT_BAMFILE_NAME+'.sorted.bam', shell=True, stdout = out)
 		subprocess.call(SAMTOOLS_FOLDER+'samtools index '+ MUT_BAMFILE_NAME + '.sorted.bam ' + MUT_BAMFILE_NAME + '.sorted.bai',\
 			shell=True, stdout = out)
 	bamfile.close()
