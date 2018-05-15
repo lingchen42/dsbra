@@ -70,4 +70,3 @@ dependencies:
 - libgcc=5.2.0=0
 - libgfortran=3.0.0=1
 - mkl=2017.0.3=0
-prefix: /home/chenl11/.conda/envs/dsbra
