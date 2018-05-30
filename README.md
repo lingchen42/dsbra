@@ -20,19 +20,56 @@ conda env create -n dsbra -f dsbra_conda.yml
 ```
 source activate dsbra
 ```
-5. Run the scripts. 
+5. Run the `sam_dsbra_interface.py` to infer the mutation events. 
 ```
 python sam_dsbra_interface.py -r <reference.fa> -q <sample.fastq|.fq> -b <break_index>,<margin>,<last_margin> -o <output_filename.txt> [-v] [-c]
 ```
-example use:
+Example use:
 ```
 python sam_dsbra_interface.py -r example_data/nfr_ref_seq.fa -q example_data/RIF1_NFR.fastq -b 100,10,5 -o temp_out.txt
 ```
 The results will be in the `temp_out.txt` file. <br>
-This python script calls the bowtie2 and samtools, therefore will also generate some other files. Those files, together with running
-information will be stored in `temp_outputs/` directory. <br>
 
-6. Finally, exit the virtual environment
+6. To plot the results, run the `sam_dsbra_grapher_ling.py`.
+```
+./sam_dsbra_grapher_ling.py -h
+usage: sam_dsbra_grapher_ling.py [-h] [-R R] [-o OUT_DIR] -i INPUT_FILES
+                                 [INPUT_FILES ...] [--all] [--mut_type]
+                                 [--del_len] [--del_seq] [--ins_len]
+                                 [--ins_seq]
+
+Visualize Mutation Events
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -R R                  R plotting script path
+  -o OUT_DIR, --out_dir OUT_DIR
+                        output directory, default is plots_2018-05-30/
+  -i INPUT_FILES [INPUT_FILES ...], --input_files INPUT_FILES
+[INPUT_FILES ...]
+                        the output txt files from sam_dsbra_interface.py
+  --all                 plot all types of plots
+  --mut_type            plot Mutation Event Frequency by Type
+  --del_len             plot Frequency of Deletions by Length
+  --del_seq             plot Sequences with Deletion Event
+  --ins_len             plot Frequency of Insertions by Length
+  --ins_seq             plot Sequences with Insertion Event
+
+```
+Example use:
+If we want to plot Mutation Event Frequency by Type, use: <br>
+```
+./sam_dsbra_grapher_ling.py -i example_outputs/RIF1_NFR_output.txt -o example_outputs/ --mut_type
+```
+The Mutation Event Frequency by Type plot will be `example_outputs/RIF1_NFR_output_mutation_event_frequency_by_type.png`. <br>
+<br>
+If we want to plot all types of plots: <br>
+```
+./sam_dsbra_grapher_ling.py -i example_outputs/RIF1_NFR_output.txt -o example_outputs/ --all
+```
+The plots will be in `example_outputs` directory. <br>
+
+7. Finally, exit the virtual environment
 ```
 source deactivate
 ```
