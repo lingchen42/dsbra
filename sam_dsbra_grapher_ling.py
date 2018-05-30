@@ -139,7 +139,7 @@ if __name__ == '__main__':
                             help='R plotting script path')
     arg_parser.add_argument("-o", "--out_dir",
                             default='plots_%s/'%str(datetime.now())[:10],
-                            help="output directory, default=summary_graph%s/"%str(datetime.now())[:10])
+                            help="output directory, default is plots_%s/"%str(datetime.now())[:10])
     arg_parser.add_argument("-i", "--input_files", nargs='+', required=True,
                             help="the output txt files from sam_dsbra_interface.py")
     arg_parser.add_argument("--all", action='store_true',
