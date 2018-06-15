@@ -7,7 +7,7 @@ Analyze .fastq files for insertions, deletions, and microhomologous end joining 
 ```
 ml Intel git Anaconda2 Bowtie2/2.3.2
 ```
-2. Clone the git repo to ACCRE and cd into the directory
+2. Clone the git repo to ACCRE and cd into the directory (This step only needs to be done the first time.)
 ```
 git clone https://github.com/lingchen42/dsbra.git
 cd dsbra
