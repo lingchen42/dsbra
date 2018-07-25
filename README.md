@@ -22,11 +22,11 @@ source activate dsbra
 ```
 5. Run the `sam_dsbra_interface.py` to infer the mutation events. 
 ```
-python sam_dsbra_interface.py -r <reference.fa> -q <sample.fastq|.fq> -b <break_index>,<margin>,<last_margin> -o <output_filename.txt> [-v] [-c]
+python sam_dsbra_interface_ling.py -r <reference.fa> -q <sample.fastq|.fq> -b <break_index>,<margin>,<last_margin> -o <output_filename.txt> [-v] [-c]
 ```
 Example use:
 ```
-python sam_dsbra_interface.py -r example_data/nfr_ref_seq.fa -q example_data/RIF1_NFR.fastq -b 100,10,5 -o temp_out.txt
+python sam_dsbra_interface_ling.py -r example_data/nfr_ref_seq.fa -q example_data/RIF1_NFR.fastq -b 84,10,5 -o temp_out.txt
 ```
 The results will be in the `temp_out.txt` file. <br>
 
