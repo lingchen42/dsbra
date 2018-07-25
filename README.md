@@ -7,12 +7,12 @@ Analyze .fastq files for insertions, deletions, and microhomologous end joining 
 ```
 ml Intel git Anaconda2 Bowtie2/2.3.2
 ```
-2. Clone the git repo to ACCRE and cd into the directory
+2. Clone the git repo to ACCRE and cd into the directory (This step only needs to be done the first time.)
 ```
 git clone https://github.com/lingchen42/dsbra.git
 cd dsbra
 ```
-3. Install dependencies within a conda virtual enviroment. (This step only needs to be done the first time.)
+3. Install dependencies within a conda virtual enviroment. (This step only needs to be done the first time. If the dsbra virtual enviroment already exists, please remove the old one or give the new one a different name, using the `-n` flag.)
 ```
 conda env create -n dsbra -f dsbra_conda.yml
 ```
