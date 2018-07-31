@@ -14,15 +14,18 @@ option_list <- list(
     make_option("--del_seq", action='store_true', default=FALSE,
                 help="plot sequences_with_deletion_events.csv\
                 plot Sequences with Deletion Event"),
-    make_option("--num_seq", default=20,
-                help="determine how many seqs to include in\
-                      Sequences with Deletion/Insertion Event"),
+    make_option("--min_count", default=50,
+                help="determine how the minimum counts to include in\
+                      Sequences with Deletion/Insertion/Mutation Event"),
     make_option("--ins_len", action='store_true', default=FALSE,
                 help="plot insertion_lens.csv\
                 plot Frequency of Insertions by Length"),
     make_option("--ins_seq", action='store_true', default=FALSE,
                 help="plot sequences_with_insertion_events.csv\
-                plot Sequences with Insertion Event")
+                plot Sequences with Insertion Event"),
+    make_option("--repair_seq", action='store_true', default=FALSE,
+                help="plot sequences_with_mutation_events.csv\
+                plot Sequences with Mutation Event")
     )
 opt <- parse_args(OptionParser(option_list=option_list))
 
@@ -34,7 +37,7 @@ basename <- tools::file_path_sans_ext(opt$input)
 outname <- sprintf('%s.png', basename)
 print(sprintf('Writing to %s', outname))
 
-num_seq <- opt$num_seq
+min_count <- opt$min_count
 
 # Mutation Event Frequency by Type, pie
 #if (opt$mut_type){
@@ -71,12 +74,14 @@ if (opt$del_len){
 # Sequences with deletion events
 if (opt$del_seq){
     df$sequence <- factor(df$sequence, levels = df[order(df$count),]$sequence)
-    p <- ggplot(data=df[order(-df$count),][0:num_seq, ], aes(x=sequence, y=count)) +
+    df <- subset(df, count > min_count)
+    p <- ggplot(data=df[order(-df$count),], aes(x=sequence, y=count)) +
     geom_bar(stat="identity", width=.5) +
     labs(x='Sequences', y='Count', title='Sequences With Deletion Events') +
-    geom_text(aes(label=count), position=position_dodge(width=0.9), hjust=-0.3, size=3) +
+    geom_text(aes(label=count), position=position_dodge(width=0.9), hjust=-0.3, size=4*20/nrow(df)) +
     theme_bw() +
-    theme(aspect.ratio = 1 * num_seq / 20) +
+    theme(aspect.ratio = 1 * nrow(df) / 20,
+          axis.text=element_text(size=16*20/nrow(df))) +
     coord_flip(ylim = c(0, max(df$count) * 1.2))
     ggsave(filename=outname, plot=p)
 }
@@ -92,15 +97,31 @@ if (opt$ins_len){
     ggsave(filename=outname, plot=p)
 }
 
-# Sequences with deletion events
+# Sequences with insertion events
 if (opt$ins_seq){
     df$sequence <- factor(df$sequence, levels = df[order(df$count),]$sequence)
-    p <- ggplot(data=df[order(-df$count),][0:num_seq, ], aes(x=sequence, y=count)) +
+    df <- subset(df, count > min_count)
+    p <- ggplot(data=df[order(-df$count),], aes(x=sequence, y=count)) +
     geom_bar(stat="identity", width=.5) +
     labs(x='Sequences', y='Count', title='Sequences With Insertion Events') +
     geom_text(aes(label=count), position=position_dodge(width=0.9), hjust=-0.3, size=3) +
     theme_bw() +
-    theme(aspect.ratio = 1 * num_seq / 20) +
+    theme(aspect.ratio = 0.5 * nrow(df) / 20) +
     coord_flip(ylim = c(0, max(df$count) * 1.2))
     tryCatch(ggsave(filename=outname, plot=p), error= function(err){print('insetion seq fails')})
+}
+
+# Sequences with mutation events
+if (opt$repair_seq){
+    df$sequence <- factor(df$sequence, levels = df[order(df$count),]$sequence)
+    df <- subset(df, count > min_count)
+    p <- ggplot(data=df[order(-df$count),], aes(x=sequence, y=count)) +
+    geom_bar(stat="identity", width=.5) +
+    labs(x='Sequences', y='Count', title='Repair Patterns') +
+    geom_text(aes(label=count), position=position_dodge(width=0.9), hjust=-0.3, size=4*20/nrow(df)) +
+    theme_bw() +
+    theme(aspect.ratio = 1 * nrow(df) / 20,
+          axis.text=element_text(size=16*20/nrow(df))) +
+    coord_flip(ylim = c(0, max(df$count) * 1.2))
+    tryCatch(ggsave(filename=outname, plot=p), error= function(err){print('repair patterns fails')})
 }
