@@ -1,20 +1,31 @@
 ################################################
-# sam_dsbra_interface.py -r <reference.fa> -q <sample.fastq|.fq> -b <break_index>,<margin>,<last_margin> -o <output_filename.csv> [-v]
-# -r <reference.fa> - indicates the fasta-formatted reference sequence to align fastq file to
-# -q <sample.fq> - indicates fastq file for alignment to reference sequence
-# -b <break_index>, <margin>, <last_margin> - indicates the location within reference sequence where break is expected(break_index), the margin
-#       before and after the break index that should be considered for analysis(margin), and the margin outside of the last mutagenic event that
-#       that should be analyzed (last_margin). For instance, a margin of 3 and last_margin of 5 would look at 3 positions on either side of expected
-#       break site and then an additional 5 bases beyond any mutation found within the initial margin.
-# -o <output_filename.txt> - location of tab-delimited output file for alignments
-# -v : verbose mode
+# 2018-07-31 Ling Chen
+#usage: sam_dsbra_interface_ling.py [-h] -o OUT_DIR [--run_name RUN_NAME]
+#                                   [-r REF_FA] [-q FASTQ] [-b BREAK_INDEX]
+#                                   [-m MARGIN] [--full_table]
+#
+#Double strand break repair analyzer (DSBRA)
+#optional arguments:
+#    -h, --help            show this help message and exit
+#    -o OUT_DIR, --out_dir OUT_DIR
+#                          output directory
+#    --run_name RUN_NAME   will be the prefix of output file names
+#    -r REF_FA, --ref_fa REF_FA
+#                          path of the reference sequence fasta file
+#    -q FASTQ, --fastq FASTQ
+#                          path of the reads to analyze in fastq format
+#    -b BREAK_INDEX, --break_index BREAK_INDEX
+#                          break index. 0-indexed, the position of nucleotide
+#                          right before the break site.
+#    -m MARGIN, --margin MARGIN
+#                          the margin before and after the break index that
+#                          should be considered for analysis
+#    --full_table          Will generate a large table with repair pattern for
+#                          each analyzed
 ################################################
-
-__version__ = '0.0.9'
-
-## Characteristics of Scar: Num_Mismatch, Location, Transitions, Transversions, Num_Insertion_Events, Location, Sequences, Num_Deletion_Events, Location, Length, is_microhomologous
-
 import sys
+import argparse
+from itertools import groupby
 import re
 import subprocess
 import pysam
@@ -27,34 +38,28 @@ import csv
 from scipy.stats import norm
 import time
 from datetime import datetime
+from collections import OrderedDict
+import pandas as pd
+from joblib import Parallel, delayed
 
-CIGAR_RE = re.compile('\d+[MIDNSHP]')
-BOWTIE2_FOLDER = ''
-BWA_FOLDER = ''
 SAMTOOLS_FOLDER = ''
-
-TEMP_DIR = tempfile.mkdtemp()
-if not os.path.exists(TEMP_DIR): os.makedirs(TEMP_DIR)
+#CIGAR_RE = re.compile('\d+[MIDNSHP]')
 RE_FASTA = re.compile(r'\>(.*)[\n|\r]+([ACTGactg\r\n]+)')
-RUN_NAME = os.path.join(TEMP_DIR, 'test_run')
-
-SAM_FILENAME = ''
-
-VERBOSE = False
+TRANSITION_D = {'A':'G', 'C':'T', 'G':'A', 'T':'C'}
 
 class RepairSample:
     def __init__(self):
         self.total_samples
 
 class RepairPattern:
-    def __init__(self,read_name):
+    def __init__(self, read_name, reference_end):
         self.read_name = read_name
         self.repair_size = 0
 
-        self.ref_begin = -1
-        self.ref_end = -1
-        self.is_filtered = False
         self.repair_sequence = ''
+
+        self.mut_bottom_range = reference_end  # for the first comparison
+        self.mut_top_range = -1  # for the first comparison
 
         self.mismatch_locations = [ ]
         self.new_mismatch_bases = [ ]
@@ -69,6 +74,7 @@ class RepairPattern:
         self.num_deletions = 0
         self.deletion_locations = [ ]
         self.deletion_lengths = [ ]
+        self.deleted_sequences = [ ]
         self.deletion_is_microhomologous = [ ]
         self.deletion_micro = [ ]
 
@@ -77,10 +83,11 @@ class RepairPattern:
         self.insertion_locations.append(ins_loc)
         self.inserted_sequences.append(ins_str)
 
-    def add_deletion(self, del_loc, del_size, is_micro, micro_seq):
+    def add_deletion(self, del_loc, del_size, del_str, is_micro, micro_seq):
         self.num_deletions += 1
         self.deletion_locations.append(del_loc)
         self.deletion_lengths.append(del_size)
+        self.deleted_sequences.append(del_str)
         self.deletion_is_microhomologous.append(is_micro)
         self.deletion_micro.append(micro_seq)
 
@@ -89,272 +96,156 @@ class RepairPattern:
         self.new_mismatch_bases.append(new_base)
         self.old_mismatch_bases.append(old_base)
 
-        if old_base == 'A':
-            if new_base == 'G':
-                self.num_transitions += 1
-            else:
-                self.num_transversions += 1
-
-        elif old_base == 'C':
-            if new_base == 'T':
-                self.num_transitions += 1
-            else:
-                self.num_transversions += 1
-
-        elif old_base == 'G':
-            if new_base == 'A':
-                self.num_transitions += 1
-            else:
-                self.num_transversions += 1
-
+        if TRANSITION_D[old_base] == new_base:
+            self.num_transitions += 1
         else:
-            if new_base == 'C':
-                self.num_transitions += 1
+            self.num_transitions += 1
+
+    def get_repair_sequence(self, read, ref_seq):
+        '''
+        Generate repair sequences
+        deletion: ^()
+        insertion: []
+        mismatch: mismatched base A/G/C/T
+        matched: *
+        '''
+        repair_seq = self.repair_sequence
+
+        q_seq = read.query_sequence
+        q_aln_locs, r_aln_locs = zip(*read.get_aligned_pairs())  # the length of these two should be equal to the sum of cigar
+        q_aln_locs = list(q_aln_locs)
+        r_aln_locs = list(r_aln_locs)
+        mut_start = r_aln_locs.index(self.mut_bottom_range)  # if the break index is 84, we want [75, 95)
+        mut_end = r_aln_locs.index(self.mut_top_range)
+
+        # cigar_d = {1:"insertion", 2:"deletion", 7:"matched", 8:"mismatched"}  # cannot deal with other status
+        cigar_tuples = read.cigartuples
+        cigar_list = []
+        for event_type, event_len in cigar_tuples:
+            cigar_list.extend([event_type for i in range(event_len)])
+        cigar_list = cigar_list[mut_start : mut_end]
+        groups = groupby(cigar_list)
+        cigar_tuples_in_region = [(label, sum(1 for _ in group)) for label, group in groups]
+
+        loc = mut_start
+        for event_type, event_len in cigar_tuples_in_region:
+            q_loc = q_aln_locs[loc]
+            r_loc = r_aln_locs[loc]
+            if event_type == 1:  # insertion
+                repair_seq += "[%s]"%q_seq[q_loc : q_loc + event_len]
+                self.repair_size += event_len
+            elif event_type == 2:  # deletion
+                repair_seq += "^(%s)"%ref_seq[r_loc : r_loc + event_len]
+                self.repair_size -= event_len
+            elif event_type == 7:  # match
+                repair_seq += "*"*event_len
+                self.repair_size += event_len
+            elif event_type == 8:  # mismatch
+                repair_seq += q_seq[q_loc : q_loc + event_len]
+                self.repair_size += event_len
             else:
-                self.num_transversions += 1
+                print("Error! Unexpected cigar number %s detected"%event_type)
+                sys.exit(1)
+            loc += event_len
 
-    def filter_pattern(self,break_index,index_margin,outside_margin,ref_seq):
-        if not self.is_filtered:
-            #make list of start/end of events
-            event_locations = list(self.insertion_locations)
-            event_locations += self.mismatch_locations
-            for i in range(len(self.deletion_locations)):
-                for j in range(self.deletion_lengths[i]):
-                    event_locations += [self.deletion_locations[i]+j]
-
-            event_locations = (sorted(set(event_locations)))
-            bottom_range = -1
-            top_range = -1
-
-            for i in range(len(event_locations)):
-                #first event within range
-                if (event_locations[i] >= break_index-index_margin) and (event_locations[i] <= break_index+index_margin):
-                    #backtrack
-                    j = i
-                    top_range = bottom_range = event_locations[i]
-                    while (j > 0):
-                        if event_locations[j]-event_locations[j-1] <= outside_margin:
-                            bottom_range = event_locations[j-1]
-                            j -= 1
-                        else:
-                            break
-
-                    top_range = bottom_range
-
-                    j = i
-                    while (j < len(event_locations)-1):
-                        if (event_locations[j+1]-event_locations[j] <= outside_margin) or (event_locations[j+1] < break_index + index_margin):
-                            top_range = event_locations[j+1]
-                            j += 1
-                        else:
-                            break
-
-                    break
+        self.repair_sequence = repair_seq
 
 
-            #TODO: Filter + reconstruct scar
-            self.ref_begin = bottom_range
-            self.ref_end = top_range
+def aln(sam_filename, ref_fa, fastq_name, break_index, run_metadata, output_dir,
+        record_failed_alignment=True):
+    '''
+    Customed aligner. Among alignments with highest scores, choose the one with
+    mutation events cloest to the break site.
+    Args:
+        sam_filename: the output alignment filename
+        ref_fa: the path to the reference fasta file
+        fastq_name: the path to the read fastq file
+        break_index: where the break occurs. O-indexed, the position of the
+                     nucleotide right before the break site.
+        run_metadata: run_metadata dictionary. For recording alignment summary
+        record_failed_alignment: Whether write the failed alignment to a file.
+    Returns:
+        run_metadata: run_metadata dictionary with alignment summary
+        It will write the alignments to sam_filename.
+    '''
 
-            ins_to_pop = []
-            for i in self.insertion_locations:
-                if i < bottom_range or i > top_range:
-                    ins_to_pop.append(i)
+    # perform the alignment, sorting, indexing
+    with open(os.devnull, 'wb') as out:
+        if not os.path.exists(sam_filename):  # if no corresponding SAM file, do the alignment
+            print("\nStart alignment...")
+            run_metadata['alignment_settings'] = './custom_alignment_dsbra.py -o %s --ref %s -f %s -b %s'%(sam_filename, ref_fa, fastq_name, break_index)
+            print(run_metadata['alignment_settings'])
+            subprocess.call(run_metadata['alignment_settings'], shell=True)
+            print("Alignment completed. The alignment file is:\n%s\n"%sam_filename)
+        else:
+            print("Alignment file %s already exist. Will use the existing alignment file."%sam_filename)
 
-            for i in ins_to_pop:
-                self.num_insertion_events -= 1
-                self.inserted_sequences.pop(self.insertion_locations.index(i))
-                self.insertion_locations.pop(self.insertion_locations.index(i))
+        subprocess.call(SAMTOOLS_FOLDER+'samtools view -@ 8 -bS '+sam_filename+' | '+SAMTOOLS_FOLDER+'samtools sort -@ 8 -o '\
+                        +sam_filename+'.sorted.bam', shell=True, stdout = out, stderr=subprocess.STDOUT)
+        subprocess.call(SAMTOOLS_FOLDER+'samtools index '+ sam_filename + '.sorted.bam ' + sam_filename + '.sorted.bai',\
+                        shell=True, stdout = out)
 
-            del_to_pop = []
-            for i in self.deletion_locations:
-                if i < bottom_range or i > top_range:
-                    del_to_pop.append(i)
+    # output the failed alignment to a file
+    if record_failed_alignment:
+        failed_alignment_fn = os.path.join(output_dir, sam_filename.split("/")[-1][:-4] + '_failed_alignment.sam')
+        print("Writing failed_alignment to %s"%failed_alignment_fn)
+        failed_aln = subprocess.call("awk 'FNR > 3 {if($2==4){print $0}}' "\
+                                     + sam_filename + '>' +  failed_alignment_fn,
+                                     shell=True)
 
-            for i in del_to_pop:
-                self.num_deletions -= 1
-                self.deletion_is_microhomologous.pop((self.deletion_locations.index(i)))
-                self.deletion_lengths.pop(self.deletion_locations.index(i))
-                self.deletion_locations.pop(self.deletion_locations.index(i))
+    # summary of alignment
+    n_failed_aln = subprocess.check_output('''awk 'FNR > 3 {if($2==4){failed += 1}} END{print failed}' '''\
+                                          + sam_filename, shell=True)
+    n_success_aln = subprocess.check_output('''awk 'FNR > 3 {if($2!=4){s += 1}} END{print s}' '''\
+                                          + sam_filename, shell=True)
+    run_metadata['num_failed_alignments'] = n_failed_aln.strip()
+    run_metadata['num_success_alignments'] =  n_success_aln.strip()
 
-            #TODO: figure out how to handle mismatch only
-            """mismatch_to_pop = []
-            for i in self.mismatch_locations:
-                if i < bottom_range or i > top_
-                    mismatch_to_pop.append(i)
-
-            for i in mismatch_to_pop:
-                old_base = self.old_mismatch_bases[self.mismatch_locations.index(i)]
-                new_base = self.new_mismatch_bases[self.mismatch_locations.index(i)]
-
-                if old_base == 'A':
-                    if new_base == 'G':
-                        self.num_transitions -= 1
-                    else:
-                        self.num_transversions -= 1
-
-                elif old_base == 'C':
-                    if new_base == 'T':
-                        self.num_transitions -= 1
-                    else:
-                        self.num_transversions -= 1
-
-                elif old_base == 'G':
-                    if new_base == 'A':
-                        self.num_transitions -= 1
-                    else:
-                        self.num_transversions -= 1
-
-                else:
-                    if new_base == 'C':
-                        self.num_transitions -= 1
-                    else:
-                        self.num_transversions -= 1
-
-                self.new_mismatch_bases.pop(self.mismatch_locations.index(i))
-                self.old_mismatch_bases.pop(self.mismatch_locations.index(i))
-                self.mismatch_locations.pop(self.mismatch_locations.index(i))"""
-
-            #Reconstructing scar -- should be filtered already
-            working_sequence = ref_seq[self.ref_begin:self.ref_end+1]
-
-            #this is kind of a patch -- fix this?
-            last_event = True
-
-            ins_to_pop = []
-            for i in range(self.ref_begin,self.ref_end+1)[::-1]:
-                if i in self.insertion_locations:
-                    working_sequence = working_sequence[:i-self.ref_begin] + '[' + self.inserted_sequences[self.insertion_locations.index(i)] + ']' + working_sequence[i-self.ref_begin:]
-                    #pop last letter here
-                    if last_event == True:
-                        working_sequence = working_sequence[:-1]
-                        last_event = False
-
-                elif i in self.deletion_locations:
-                    del_length = self.deletion_lengths[self.deletion_locations.index(i)]
-                    working_sequence = working_sequence[:i-self.ref_begin] + '^(' + working_sequence[i-self.ref_begin:(i-self.ref_begin)+del_length] + ')' + working_sequence[i-self.ref_begin+del_length:]
-
-                    if last_event == True:
-                        last_event = False
-
-                elif i in self.mismatch_locations:
-                    working_sequence = working_sequence[:i-self.ref_begin] + '*' + self.new_mismatch_bases[self.mismatch_locations.index(i)] + '*' + working_sequence[i-self.ref_begin+1:]
-
-                    if last_event == True:
-                        last_event = False
-
-            self.repair_sequence = working_sequence
-
-if __name__ == '__main__':
-    # INITIALIZATION SECTION -- reads all values from command line and #
-    # assigns values to appropriate variables for use downstream       #
-    break_index,margin,last_margin = sys.argv[sys.argv.index('-b')+1].split(',')
-    break_index = int(break_index)
-    margin = int(margin)
-    last_margin = int(last_margin)
-    fastq_name = sys.argv[sys.argv.index('-q')+1]
-    ref_fa = sys.argv[sys.argv.index('-r')+1]
-    output_filename = sys.argv[sys.argv.index('-o')+1]
-
-    VERBOSE = '-v' in sys.argv
-
-    RUN_INFO = os.path.join(TEMP_DIR, 'run_info.txt')
-    with open(RUN_INFO, 'a') as fh:
-        fh.write('Time: %s\nWorking Directory:\n%s\nCommand:\n%s\n'\
-                  %(str(datetime.now())[:-7],
-                    os.getcwd(),
-                    ' '.join(sys.argv)))
-
-    SAM_FILENAME = fastq_name[:fastq_name.rfind('.')]+'.sam'
-
-    #Read in reference fasta, write to new file after checking filetype
-    ref_fasta = open(ref_fa,'r')
-    ref_fasta_str = ref_fasta.read()
-
-    index_ref = open(RUN_NAME+'_ref.fa','w')
-    first_seq = RE_FASTA.match(ref_fasta_str)
-
-    ref_name = ''
-    ref_seq = ''
-
-    if first_seq:
-        ref_name, ref_seq = first_seq.groups(0)
-        ref_seq = re.sub(r'[\n\r]','',ref_seq).upper()
-
-        index_ref.write('>'+ref_name+'\n'+ref_seq+'\n')
-
-    else:
-        raise EOFError('FASTA sequence not detected before end of file ' + str(ref_fa))
-
-    ref_fasta.close()
-    index_ref.close()
-
-    run_metadata = {'break_index':break_index,'margin':margin,'last_margin':last_margin,'ref_filename':ref_fa,'fastq_file':fastq_name,'ref_seq':ref_seq,'timestamp':str(datetime.now()) }
-
-    ## original aligner
-    ## Check if BAM alignment file exists and create new one if not the case.
-    ## TODO: If BAM exists, verify that reference sequence used is the same
-    ## sequence used to create alignment
-    #if True:
-    #    with open(os.devnull, 'wb') as out:
-    #        if VERBOSE:
-    #            print "Creating index from file %s"%ref_fa
-
-    #        # Build index from reference.
-    #        # TODO: Error handling here?
-    #        if not '-bwa' in sys.argv:
-    #            subprocess.call(BOWTIE2_FOLDER+'bowtie2-build -f '+RUN_NAME+'_ref.fa '+RUN_NAME+'_index',shell=True, stdout = out)
-    #        else:
-    #            subprocess.call(BWA_FOLDER+'bwa index '+RUN_NAME+'_ref.fa',shell=True)
+    return run_metadata
 
 
-    #        if VERBOSE:
-    #            print "Index creation COMPLETE.\nAligning sample fastq file to index."
+def mut_within_margin(sam_filename, mut_bamfile_name, non_mut_bamfile_name,
+                      break_index, margin, run_metadata):
+    '''
+    Reads with mutation within margin.
+    Args:
+        sam_filename: alignment file
+        mut_bamfile_name: mutated reads bamfile name
+        non_mut_bamfile_name: not mutated reads bamfile name
+        run_metadata: run_metadata dictionary. For recording average coverage of
+                      bases within margin and number of qualified reads.
+    Returns:
+        run_metadata
+        It will also write the qualified reads to a file.
 
-    #        # Align fastq file using BOWTIE2
-    #        # TODO: Check for fastq errors
-    #        if not '-bwa' in sys.argv:
-    #            run_metadata['alignment_settings'] = "BOWTIE2_FOLDER+'bowtie2 --local -p 8 -x '+RUN_NAME+'_index -q '+fastq_name+' -S '+SAM_FILENAME"
-    #            subprocess.call(BOWTIE2_FOLDER+'bowtie2 --local -p 8 -x '+RUN_NAME+'_index -q '+fastq_name+' -S '+SAM_FILENAME,shell=True)
-    #        else:
-    #            run_metadata['alignment_settings'] = "BWA_FOLDER+'bwa mem '+RUN_NAME+'_ref.fa '+fastq_name+' > '+SAM_FILENAME"
-    #            subprocess.call(BWA_FOLDER+'bwa mem '+RUN_NAME+'_ref.fa '+fastq_name+' > '+SAM_FILENAME,shell=True)
+    '''
 
-    # customed aligner
-    if True:
-        with open(os.devnull, 'wb') as out:
-            if not os.path.exists(SAM_FILENAME):  # if no corresponding SAM file, do the alignment
-                run_metadata['alignment_settings'] = './custom_alignment_dsbra.py -o %s --ref %s -f %s -b %s'%(SAM_FILENAME, ref_fa, fastq_name, break_index)
-                print(run_metadata['alignment_settings'])
-                subprocess.call(run_metadata['alignment_settings'], shell=True)
-            else:
-                print("Alignment file %s already exist. Will use the existing alignment file."%SAM_FILENAME)
+    bamfile = pysam.AlignmentFile(sam_filename+'.sorted.bam','rb')
 
-            subprocess.call(SAMTOOLS_FOLDER+'samtools view -@ 8 -bS '+SAM_FILENAME+' | '+SAMTOOLS_FOLDER+'samtools sort -@ 8 -o '\
-                            +SAM_FILENAME+'.sorted.bam', shell=True, stdout = out, stderr=subprocess.STDOUT)
-            subprocess.call(SAMTOOLS_FOLDER+'samtools index '+ SAM_FILENAME + '.sorted.bam ' + SAM_FILENAME + '.sorted.bai',\
-                            shell=True, stdout = out)
-
-    bamfile = pysam.AlignmentFile(SAM_FILENAME+'.sorted.bam','rb')
-
-    #VERSION 0.0.4 -- Mutational database now incorporates
-    #First pass on SAM/BAM file creates secondary file with all reads requiring further evaluation (non-WT within margin)
+    # VERSION 0.0.4 -- Mutational database now incorporates
+    # First pass on SAM/BAM file creates secondary file
+    # with all reads requiring further evaluation (non-WT within margin)
     mut_reads_list = [ ]
-    MUT_BAMFILE_NAME = os.path.join(TEMP_DIR, "temp_mut_reads.sam")
 
-    if os.path.exists(MUT_BAMFILE_NAME):
-        print "ERROR: File \"%s\" exists."%MUT_BAMFILE_NAME
+    if os.path.exists(mut_bamfile_name):
+        print "ERROR: File \"%s\" exists."%mut_bamfile_name
         sys.exit()
 
-    mut_bamfile = pysam.AlignmentFile(MUT_BAMFILE_NAME,"wh", template=bamfile, reference_names=bamfile.references, reference_lengths=bamfile.lengths)
+    mut_bamfile = pysam.AlignmentFile(mut_bamfile_name,"wh", template=bamfile,
+                                      reference_names=bamfile.references,
+                                      reference_lengths=bamfile.lengths)
 
-    print "Beginning first scan of SAM file..."
+    print("...\nBeginning first scan of SAM file...")
     start_time = time.time()
 
     #Find average coverage within margin
     coverage_list = []
 
-    for pileupcolumn in bamfile.pileup(bamfile.references[0], start=break_index-margin, end=break_index+margin, truncate=True, max_depth=250000):
+    for pileupcolumn in bamfile.pileup(bamfile.references[0],
+                                       start=break_index-margin+1, # break index 84, we want [75, 95)
+                                       end=break_index+margin+1,
+                                       truncate=True,
+                                       max_depth=250000):
         coverage_list.append(pileupcolumn.n)
 
         for pileupread in pileupcolumn.pileups:
@@ -364,12 +255,14 @@ if __name__ == '__main__':
                 continue
 
             mutated = False
-            #check if mismatch occurring
+
+            # is there is indel
             if pileupread.indel != 0 or pileupread.is_del:
                 mutated = True
-            #TODO: Figure out what to do with mismatch only
-            elif ('-m' in sys.argv) and pileupread.indel == 0 and not pileupread.is_del:
-                if ref_seq[pileupcolumn.pos] != pileupread.alignment.query_sequence[pileupread.query_position]:
+            # is there is a mismatch
+            else:
+                if ref_seq[pileupcolumn.pos] != \
+                   pileupread.alignment.query_sequence[pileupread.query_position]:
                     mutated = True
 
             if mutated:
@@ -377,153 +270,346 @@ if __name__ == '__main__':
                 mut_bamfile.write(pileupread.alignment)
 
     run_metadata['coverage'] = int(np.mean(coverage_list))
+    run_metadata['num_reads_with_mutations_within_range'] = len(mut_reads_list)
 
     #Close and sort/index new bamfile
     mut_bamfile.close()
     with open(os.devnull, 'wb') as out:
-        subprocess.call(SAMTOOLS_FOLDER+'samtools view -@ 8 -bS '+MUT_BAMFILE_NAME+' | '+SAMTOOLS_FOLDER+'samtools sort -@ 8 -o '\
-            +MUT_BAMFILE_NAME+'.sorted.bam', shell=True, stdout = out)
-        subprocess.call(SAMTOOLS_FOLDER+'samtools index '+ MUT_BAMFILE_NAME + '.sorted.bam ' + MUT_BAMFILE_NAME + '.sorted.bai',\
+        subprocess.call(SAMTOOLS_FOLDER+'samtools view -@ 8 -bS '+mut_bamfile_name+' | '+SAMTOOLS_FOLDER+'samtools sort -@ 8 -o '\
+            +mut_bamfile_name+'.sorted.bam', shell=True, stdout = out)
+        subprocess.call(SAMTOOLS_FOLDER+'samtools index '+ mut_bamfile_name + '.sorted.bam ' + mut_bamfile_name + '.sorted.bai',\
             shell=True, stdout = out)
     bamfile.close()
 
-    print "First scan and sorting ended. Total time: " + str(time.time()-start_time)
+    run_metadata['num_reads_without_mutations_within_range'] = \
+            int(run_metadata['num_success_alignments']) \
+            - run_metadata['num_reads_with_mutations_within_range']
 
-    #Now we do the dirty work -- probably can parallelize this -- kick identified reads to "analyzer"
-    bamfile = pysam.AlignmentFile(MUT_BAMFILE_NAME+".sorted.bam","rb")
+    print "First scan and sorting ended. Total time: " + str(time.time()-start_time) + "\n..."
 
-    #TODO: fix this for all references?
-    #TODO: make sure adequate coverage on either side of break
-    rp_list = [ ]
+    return run_metadata
 
+
+def check_microhomology(ref_seq, del_start_loc, del_len, microhomology_cutoff=2):
+    '''
+    check is the deletion is microhomology
+    Args:
+        ref_seq: reference sequence
+        del_end_loc: the position of the last nucleotide of the deletion in reference sequence
+        del_len: length of deletion
+        microhomology_cutoff: the minimum length to count as being microhomology
+    Return:
+        is_mmej: boolean, whether it's a microhomology or not
+        microhomology: microhomology sequence
+    '''
+    m = microhomology_cutoff
+    is_mmej = False
+    microhomology = ''
+
+    matched = True
+    while matched:
+        before_del_span = (del_start_loc - m, del_start_loc)
+        after_del_span = (del_start_loc + del_len, del_start_loc + del_len + m)
+        if ref_seq[before_del_span[0] : before_del_span[1]] \
+           == ref_seq[after_del_span[0] : after_del_span[1]]:
+            m += 1
+            is_mmej = True
+            mircrohomogy = ref_seq[before_del_span[0] : before_del_span[1]]
+        else:
+            matched = False
+
+    return is_mmej, microhomology
+
+
+def mutation_pattern(read, ref_seq, break_index, margin, mismatch_cutoff=1):
+    '''
+    create a repair pattern entry for the read
+    Args:
+        read: pysam.AlignedSegment object
+        ref_seq: reference DNA sequence
+        break_index:
+        margin:
+        mismatch_cutoff: the mismatch event has to be < N bp from the break site
+                         to be considered in the repair size/pattern calculation
+    Returns:
+        rp: RepairPattern class object
+    '''
+
+    rp = RepairPattern(read.query_name, read.reference_end)
+
+    q_aln_locs, r_aln_locs = zip(*read.get_aligned_pairs())  # the length of these two should be equal to the sum of cigar
+    q_aln_locs = list(q_aln_locs)
+    r_aln_locs = list(r_aln_locs)
+
+    # map the region of interest based on the break index and margin
+    global_locs = range(len(r_aln_locs))
+    region_start = r_aln_locs.index(break_index + 1 - margin)  # if the break index is 84, we want [75, 95)
+    region_end = r_aln_locs.index(break_index + 1 + margin)
+
+    # if the mutation event overlaps with region of interest, record it.
+    cigar_tuples = read.cigartuples
+    loc = 0
+    for event_type, event_len in cigar_tuples:
+        q_loc = q_aln_locs[loc]  # map loc to location in query sequence
+        r_loc = r_aln_locs[loc]  # map loc to location in reference sequence
+
+        # if there is any overlap of mutation event with the region of interest,
+        # we'll analyze it
+        overlap = set(range(loc, loc + event_len)) & set(range(region_start, region_end))
+        if overlap:
+            if event_type == 7:  # matched
+                pass
+
+            elif event_type == 8:  # mismatch
+
+                if abs(break_index - r_loc) <= mismatch_cutoff:
+                    # if the mismatch happened really close to the break site
+                    # update mutation events range, for calculating working sequences
+                    mut_bottom_range = r_loc
+                    mut_top_range = r_aln_locs[loc + event_len]
+                    if mut_bottom_range and (mut_bottom_range < rp.mut_bottom_range):
+                        rp.mut_bottom_range = mut_bottom_range
+                    if mut_top_range and (mut_top_range > rp.mut_top_range):
+                        rp.mut_top_range = mut_top_range
+
+                    for l in range(loc, loc + event_len):
+                        rp.add_mismatch(loc, read.query_sequence[q_aln_locs[l]],
+                                        ref_seq[r_aln_locs[l]])
+
+
+            elif event_type in [1, 2]:
+
+                # update mutation events range, for calculating working sequences
+                mut_bottom_range = r_loc
+                mut_top_range = r_aln_locs[loc + event_len]
+                if mut_bottom_range and (mut_bottom_range < rp.mut_bottom_range):
+                    rp.mut_bottom_range = mut_bottom_range
+                if mut_top_range and (mut_top_range > rp.mut_top_range):
+                    rp.mut_top_range = mut_top_range
+
+                if event_type == 1:    # insertion
+                    ins_str = read.query_sequence[q_loc : q_loc + event_len]
+                    if loc > 0:  # if the insertion does not occur before ref starts
+                        rp.add_insertion(r_aln_locs[loc - 1], ins_str)
+
+                else:  # deletion
+                    del_str = ref_seq[r_loc : r_loc + event_len]
+                    is_mmej, microhomology = check_microhomology(ref_seq, r_loc, event_len)
+                    rp.add_deletion(r_loc, event_len, del_str, is_mmej, microhomology)
+
+            else:
+                print("Cigar type %s is not implemented. Skip this read: %s"%(event_type, cigar_))
+                return "skipped"
+
+        loc += event_len  # update current loc
+
+    # if the mismatch > mismatch_cutoff, but there are no other mutation events within break +/- margin
+    # then the mut_bottom_range or mut_top_range may have not been changed. However, it's likely
+    # sequencing error, we are going to ignore this read.
+    if (rp.mut_bottom_range ==  len(ref_seq))or (rp.mut_bottom_range == -1):
+       return "skipped"
+
+    return rp
+
+
+def get_rp(read, ref_seq, rp_entries, break_index, margin):
+
+        rp = mutation_pattern(read, ref_seq, break_index, margin)
+        if rp != 'skipped':
+            rp.get_repair_sequence(read, ref_seq)
+
+            rp_entries['read_name'].append(rp.read_name)
+            rp_entries['repair_size'].append(rp.repair_size)
+            rp_entries['mismatch_locations'].append(rp.mismatch_locations)
+            rp_entries['new_mismatch_bases'].append(rp.new_mismatch_bases)
+            rp_entries['num_mismatch'].append((rp.num_transitions + rp.num_transversions))
+            rp_entries['num_transitions'].append(rp.num_transitions)
+            rp_entries['num_transversions'].append(rp.num_transversions)
+            rp_entries['num_insertions'].append(rp.num_insertion_events)
+            rp_entries['insertion_locs'].append(rp.insertion_locations)
+            rp_entries['insertion_seqs'].append(rp.inserted_sequences)
+            rp_entries['num_deletions'].append(rp.num_deletions)
+            rp_entries['deletion_locs'].append(rp.deletion_locations)
+            rp_entries['deletion_lens'].append(rp.deletion_lengths)
+            rp_entries['deletion_sequences'].append(rp.deleted_sequences)
+            rp_entries['deletion_is_micro'].append(rp.deletion_is_microhomologous)
+            rp_entries['repair_sequence'].append(rp.repair_sequence)
+            rp_entries['micro_seq'].append(rp.deletion_micro)
+
+        return rp_entries
+
+
+if __name__ == '__main__':
+    # parse args
+    arg_parser = argparse.ArgumentParser(description="Double strand break repair analyzer (DSBRA)")
+
+    arg_parser.add_argument("-o", "--out_dir", required=True,
+                            help="output directory")
+    arg_parser.add_argument("--run_name", default="test_run",
+                            help="will be the prefix of output file names")
+    arg_parser.add_argument("-r", "--ref_fa",
+                            help="path of the reference sequence fasta file")
+    arg_parser.add_argument("-q", "--fastq",
+                            help="path of the reads to analyze in fastq format")
+    arg_parser.add_argument("-b", "--break_index", type=int,
+                            help="break index. 0-indexed, the position of nucleotide right before the break site.")
+    arg_parser.add_argument("-m", "--margin", type=int,
+                            help="the margin before and after the break index that should be considered for analysis")
+    arg_parser.add_argument("--full_table", action="store_true",
+                            help="Will generate a large table with repair pattern for each analyzed")
+#    arg_parser.add_argument( "--intermediate_files", action="store_true",
+#                            help="Whether to keep the intermediate files generated by the script")
+
+    args = arg_parser.parse_args()
+    print("")
+
+    # set global values
+    break_index = args.break_index
+    margin = args.margin
+    fastq_name = args.fastq
+    ref_fa = args.ref_fa
+    run_name = args.run_name
+    sam_filename = fastq_name[:fastq_name.rfind('.')]+'.sam'
+
+    output_dir = args.out_dir
+    if os.path.exists(output_dir) :
+        #print("Error! The output directory %s already exists. Please use a"
+        #      "different name or delete the exisiting output directory."%(output_dir))
+        #sys.exit(1)
+        print("WARNING! Overwritting the existing output directory %s."%(output_dir))
+    else:
+        os.makedirs(output_dir)
+    print("")
+
+    mut_bamfile_name = os.path.join(output_dir, "%s_mut_reads.sam"%(run_name))
+    non_mut_bamfile_name = os.path.join(output_dir, "%s_non_mut_reads.sam"%(run_name))
+    summary_table_fn = os.path.join(output_dir, "%s_repair_pattern_summary_table.txt"%(run_name))
+    if args.full_table:
+        repair_pattern_table_fn = os.path.join(output_dir, \
+                                               "%s_repair_pattern_full_table.txt"%(run_name))
+
+    output_filename = os.path.join(output_dir, "%s_repair_pattern_summary.txt"%run_name)
+    run_info = os.path.join(output_dir, '%s_run_info.txt'%run_name)
+
+    with open(run_info, 'w+') as fh:
+        fh.write('Time: %s\nWorking Directory:\n%s\nCommand:\n%s\n'\
+                  %(str(datetime.now())[:-7],
+                    os.getcwd(),
+                    ' '.join(sys.argv)))
+
+
+    # read in reference fasta, write to new file after checking filetype
+    with open(ref_fa, 'r') as ref_fasta:
+        ref_fasta = open(ref_fa,'r')
+        ref_fasta_str = ref_fasta.read()
+        index_ref_fn = os.path.join(output_dir, '%s_ref.fa'%run_name)
+        with open(index_ref_fn, 'w') as index_ref:
+            first_seq = RE_FASTA.match(ref_fasta_str)
+            ref_name = ''
+            ref_seq = ''
+            if first_seq:
+                ref_name, ref_seq = first_seq.groups(0)
+                ref_seq = re.sub(r'[\n\r]','',ref_seq).upper()
+                index_ref.write('>'+ref_name+'\n'+ref_seq+'\n')
+            else:
+                raise EOFError('FASTA sequence not detected before end of file.'\
+                               + str(ref_fa))
+
+
+    # store run info
+    run_metadata = [('timestamp', str(datetime.now())),
+                    ('ref_filename', ref_fa),\
+                    ('fastq_file', fastq_name),\
+                    ('ref_seq', ref_seq),\
+                    ('break_index', break_index), \
+                    ('margin', margin)]
+    run_metadata = OrderedDict(run_metadata)  # to print in a specific order
+
+
+    # customed aligner
+    run_metadata = aln(sam_filename, ref_fa, fastq_name, break_index, run_metadata,
+                       output_dir, record_failed_alignment=True)
+    print("")
+
+    # get reads that have mutation events within range
+    if os.path.exists(mut_bamfile_name):
+        print("Already filtered for reads with mutations within range in %s"%mut_bamfile_name)
+    else:
+        mut_within_margin(sam_filename, mut_bamfile_name, non_mut_bamfile_name,
+                          break_index, margin, run_metadata)
+
+    # analyzing the repair pattern of each read, store in a table
+    bamfile = pysam.AlignmentFile(mut_bamfile_name+".sorted.bam","rb")
+
+    fields = ['read_name', 'repair_size', 'mismatch_locations',
+              'new_mismatch_bases', 'num_mismatch', 'num_transitions',
+              'num_transversions', 'num_insertions', 'insertion_locs',
+              'insertion_seqs', 'num_deletions', 'deletion_locs',
+              'deletion_lens', 'deletion_sequences',
+              'deletion_is_micro', 'micro_seq', 'repair_sequence']
+    rp_entries = {}
+    for f in fields:
+        rp_entries[f] = []
+
+    # get_rp is useful is to parallize the code
     for read in bamfile.fetch(bamfile.references[0]):
-        rp = RepairPattern(read.query_name)
-        lastq = -1
-        lastr = -1
-        indel = 0
-        ins_str = ''
+        rp_entries = get_rp(read, ref_seq, rp_entries, break_index, margin)
 
-        started = False
-        # for (x,y) x = query position, y = ref position
-        for pair in read.get_aligned_pairs():
-            if not started:
-                if pair[0] and pair[1]:
-                    lastq = pair[0]
-                    lastr = pair[1]
-                    started = True
-                else:
-                    continue
+    # parallized version
+#    rp_entries = Parallel(n_jobs=-1)(delayed(get_rp)(read, ref_seq, rp_entries,
+#                                                     break_index, margin)\
+#                                     for read in bamfile.fetch(bamfile.references[0]))
 
-            #check for indels
-            if not pair[0]: #deletion
-                indel -= 1
-            elif not pair[1]: #insertion
-                indel += 1
-                ins_str += read.query_sequence[pair[0]]
-            else: #matched reads
-                if indel != 0:
-                    #deletion
-                    if indel < 0:
-                        #checking for microhomology
-                        del_loc = pair[1] + indel
-                        outside_loc = pair[1]
 
-                        microhomology = ''
-                        while (ref_seq[del_loc] == ref_seq[outside_loc]) and (len(microhomology) < abs(indel)):
-                            microhomology += ref_seq[del_loc]
-                            del_loc += 1
-                            outside_loc += 1
+    df = pd.DataFrame(rp_entries, columns=fields)
+    if args.full_table:
+        print("Writing full table to %s"%repair_pattern_table_fn)
+        df.to_csv(repair_pattern_table_fn, sep="\t", index=False)
 
-                        del_loc = pair[1]-1
-                        outside_loc = pair[1] - 1 + indel
+    # generate summary table of reads. Groups reads with the same repair pattern
+    print("Writing summary table to %s \n"%summary_table_fn)
+    df = pd.read_table(repair_pattern_table_fn)  # this solves the problem caused by a python list in a cell, otherwise it cannot be grouped appropriately
+    df = df.drop("read_name", axis=1)
+    df['count'] = 1
+    df = df.groupby(list(df.columns[:-1]), as_index=False).agg({'count':'sum'})
+    df['mut_freq'] = df['count'] / (df['count'].sum())
+    df = df.sort_values(by='count', ascending=False)
+    # TO DO mut_freq
+    df.to_csv(summary_table_fn, sep='\t', index=False)
 
-                        rev_microhomology = ''
-                        while ref_seq[del_loc] == ref_seq[outside_loc] and (len(rev_microhomology) < abs(indel)):
-                            rev_microhomology += ref_seq[del_loc]
-                            del_loc -= 1
-                            outside_loc -= 1
+    # the reads made to the end (repair pattern analyzed reads) can be different
+    # from reads_with_mutations_within_range
+    # because some reads can only mismatches within range, but not immediately close to break index and got filtered out
+    run_metadata['Repair pattern analyzed reads'] = df['count'].sum()
 
-                        if len(microhomology) < len(rev_microhomology):
-                            microhomology = rev_microhomology
+    # write run metadata
+    print("Writing run metadata to %s\n"%(run_info))
+    with open(run_info, 'a') as fh:
+        for key, item in run_metadata.iteritems():
+            if key != 'timestamp':
+                fh.write("%s:\n%s\n"%(key, item))
 
-                        is_mmej = False
-                        if len(microhomology) >= 2:
-                            is_mmej = True
+    print("Complete!")
 
-                        rp.add_deletion(pair[1]+indel,abs(indel),is_mmej,microhomology)
-                    #insertion
-                    else:
-                        rp.add_insertion(pair[1],ins_str)
-                        ins_str = ''
 
-                    indel = 0
+###############################################################################
+# original aligner uses bowtie2. Fail to get the closet alignment
+# to the break site.
+###############################################################################
 
-                #now check mismatch
-                if read.query_sequence[pair[0]] != ref_seq[pair[1]]:
-                    rp.add_mismatch(pair[1],read.query_sequence[pair[0]], ref_seq[pair[1]])
 
-        #TODO: Filter outside of window
-        rp.filter_pattern(break_index,margin,last_margin,ref_seq)
-        rp_list.append(rp)
-
-    # remove temporary output folder
-    #shutil.rmtree(TEMP_DIR)
-    print("temp dir is %s"%TEMP_DIR)
-
-    #Save all this info to database
-    #TODO: have this run concurrently to make life easier/faster
-    collection_name = fastq_name[:fastq_name.rfind('.')]+'_'+str(break_index)+'_'+str(margin)+'_'+str(last_margin)
-    collection = []
-    for rp in rp_list:
-        rp_entry = {'read_name':rp.read_name,
-                    'ref_begin': rp.ref_begin,\
-                    'repair_size': rp.repair_size,\
-                    'mismatch_locations': rp.mismatch_locations,\
-                    'new_mismatch_bases': rp.new_mismatch_bases,\
-                    'num_mismatch': (rp.num_transitions + rp.num_transversions),\
-                    'num_transitions': rp.num_transitions,\
-                    'num_transversions': rp.num_transversions,\
-                    'num_insertions': rp.num_insertion_events,\
-                    'insertion_locs': rp.insertion_locations,\
-                    'insertion_seqs': rp.inserted_sequences,\
-                    'num_deletions': rp.num_deletions,\
-                    'deletion_locs': rp.deletion_locations,\
-                    'deletion_lens': rp.deletion_lengths,\
-                    'deletion_micro': rp.deletion_is_microhomologous,\
-                    'repair_sequence': rp.repair_sequence,\
-                    'deletion_is_micro': rp.deletion_is_microhomologous,\
-                    'micro_seq': rp.deletion_micro}
-
-        collection.append(rp_entry)
-
-    with open(output_filename,'wb') as op:
-            rp_list = []
-            rp_list_count = []
-
-            for rp in collection:
-                #remove read name to promote compression
-                del rp['read_name']
-                if not rp in rp_list:
-                    rp_list.append(rp)
-                    rp_list_count.append(1)
-                else:
-                    rp_list_count[rp_list.index(rp)] += 1
-
-            #Write to file
-            op.write('#'+str(int(np.mean(coverage_list)))+'\n')
-
-            for key in rp_list[0].keys():
-                op.write(key)
-                op.write('\t')
-            op.write('count\t')
-            op.write('mut_freq\t')
-            op.write('\n')
-
-            num_mut_seqs = np.sum(rp_list_count)
-
-            for i in range(len(rp_list)):
-                for x in rp_list[i]:
-                    op.write(str(rp_list[i][x])+'\t')
-                op.write(str(rp_list_count[i])+'\t')
-                op.write(str(float(rp_list_count[i])/num_mut_seqs))
-                op.write('\n')
+###############################################################################
+# original scripts for analyzing the repair pattern of each read
+# I guess the logic is:
+# for each aligned pairs, if it's a insertion or deletion, use indel to track
+# until it finds a matched pair.
+# Then it will check under the condition of indel < 0 (deletion),
+# whether it's a microhomology or not. (microhomology means nucleotides on
+# either end of deletion be the same. mmej)
+# It will then check under the condition of indel > 0 (insertion), what the
+# insertion str is, and store it. ins_str get reset.
+# Finally it will check if the matced pair is a mismatch or not.
+# This has potential problem.
+# When there is a deletion followed by insertion before a matched pair occur,
+# indel might be cancelled out.
+###############################################################################
