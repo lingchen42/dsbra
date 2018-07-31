@@ -115,8 +115,8 @@ class RepairPattern:
         q_aln_locs, r_aln_locs = zip(*read.get_aligned_pairs())  # the length of these two should be equal to the sum of cigar
         q_aln_locs = list(q_aln_locs)
         r_aln_locs = list(r_aln_locs)
-        mut_start = r_aln_locs.index(self.mut_bottom_range)  # if the break index is 84, we want [75, 95)
-        mut_end = r_aln_locs.index(self.mut_top_range)
+        mut_start = self.mut_bottom_range
+        mut_end = self.mut_top_range
 
         # cigar_d = {1:"insertion", 2:"deletion", 7:"matched", 8:"mismatched"}  # cannot deal with other status
         cigar_tuples = read.cigartuples
@@ -147,10 +147,6 @@ class RepairPattern:
                 print("Error! Unexpected cigar number %s detected"%event_type)
                 sys.exit(1)
             loc += event_len
-
-        # if the repair_seq starts with a insertion, it will have an additional "*" at the begining. We'll trim it.
-        while repair_seq.startswith("*"):
-            repair_seq = repair_seq[1:]
 
         self.repair_sequence = repair_seq
 
@@ -353,7 +349,7 @@ def mutation_pattern(read, ref_seq, break_index, margin, mismatch_cutoff=1):
     # if the mutation event overlaps with region of interest, record it.
     cigar_tuples = read.cigartuples
     loc = 0
-    mut_ranges = []
+    mut_ranges = []  # based on global locs
     for event_type, event_len in cigar_tuples:
         q_loc = q_aln_locs[loc]  # map loc to location in query sequence
         r_loc = r_aln_locs[loc]  # map loc to location in reference sequence
@@ -366,21 +362,21 @@ def mutation_pattern(read, ref_seq, break_index, margin, mismatch_cutoff=1):
                 pass
 
             elif event_type == 8:  # mismatch
-
+                # only consider mismatches that is really close to the breaksite
                 if abs(break_index - r_loc) <= mismatch_cutoff:
-                    mut_ranges.extend([r_loc, r_aln_locs[loc + event_len]])
+                    mut_ranges.extend([loc, loc + event_len])
                     for l in range(loc, loc + event_len):
                         rp.add_mismatch(loc, read.query_sequence[q_aln_locs[l]],
                                         ref_seq[r_aln_locs[l]])
 
             elif event_type == 1:    # insertion
-                mut_ranges.append(r_aln_locs[loc - 1])
+                mut_ranges.extend([loc, loc + event_len])
                 ins_str = read.query_sequence[q_loc : q_loc + event_len]
                 if loc > 0:  # if the insertion does not occur before ref starts
                     rp.add_insertion(r_aln_locs[loc - 1], ins_str)
 
             elif event_type == 2:  # deletion
-                mut_ranges.extend([r_loc, r_aln_locs[loc + event_len]])
+                mut_ranges.extend([loc, loc + event_len])
                 del_str = ref_seq[r_loc : r_loc + event_len]
                 is_mmej, microhomology = check_microhomology(ref_seq, r_loc, event_len)
                 rp.add_deletion(r_loc, event_len, del_str, is_mmej, microhomology)
