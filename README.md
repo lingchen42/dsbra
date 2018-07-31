@@ -5,7 +5,7 @@ Analyze .fastq files for insertions, deletions, and microhomologous end joining 
 ## Run On ACCRE
 1. Load necessary packages with LMOD.
 ```
-ml Intel git Anaconda2 Bowtie2/2.3.2
+ml Intel git Anaconda2
 ```
 2. Clone the git repo to ACCRE and cd into the directory (This step only needs to be done the first time.)
 ```
@@ -84,7 +84,7 @@ optional arguments:
   --del_seq             plot Sequences with Deletion Event
   --ins_len             plot Frequency of Insertions by Length
   --ins_seq             plot Sequences with Insertion Event
-
+  --repair_seq          plot top most common repair sequences
 ```
 Example use:
 If we want to plot Mutation Event Frequency by Type, use: <br>
