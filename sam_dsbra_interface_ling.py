@@ -148,6 +148,10 @@ class RepairPattern:
                 sys.exit(1)
             loc += event_len
 
+        # if the repair_seq starts with a insertion, it will have an additional "*" at the begining. We'll trim it.
+        while repair_seq.startswith("*"):
+            repair_seq = repair_seq[1:]
+
         self.repair_sequence = repair_seq
 
 
@@ -349,6 +353,7 @@ def mutation_pattern(read, ref_seq, break_index, margin, mismatch_cutoff=1):
     # if the mutation event overlaps with region of interest, record it.
     cigar_tuples = read.cigartuples
     loc = 0
+    mut_ranges = []
     for event_type, event_len in cigar_tuples:
         q_loc = q_aln_locs[loc]  # map loc to location in query sequence
         r_loc = r_aln_locs[loc]  # map loc to location in reference sequence
@@ -363,39 +368,22 @@ def mutation_pattern(read, ref_seq, break_index, margin, mismatch_cutoff=1):
             elif event_type == 8:  # mismatch
 
                 if abs(break_index - r_loc) <= mismatch_cutoff:
-                    # if the mismatch happened really close to the break site
-                    # update mutation events range, for calculating working sequences
-                    mut_bottom_range = r_loc
-                    mut_top_range = r_aln_locs[loc + event_len]
-                    if mut_bottom_range and (mut_bottom_range < rp.mut_bottom_range):
-                        rp.mut_bottom_range = mut_bottom_range
-                    if mut_top_range and (mut_top_range > rp.mut_top_range):
-                        rp.mut_top_range = mut_top_range
-
+                    mut_ranges.extend([r_loc, r_aln_locs[loc + event_len]])
                     for l in range(loc, loc + event_len):
                         rp.add_mismatch(loc, read.query_sequence[q_aln_locs[l]],
                                         ref_seq[r_aln_locs[l]])
 
+            elif event_type == 1:    # insertion
+                mut_ranges.append(r_aln_locs[loc - 1])
+                ins_str = read.query_sequence[q_loc : q_loc + event_len]
+                if loc > 0:  # if the insertion does not occur before ref starts
+                    rp.add_insertion(r_aln_locs[loc - 1], ins_str)
 
-            elif event_type in [1, 2]:
-
-                # update mutation events range, for calculating working sequences
-                mut_bottom_range = r_loc
-                mut_top_range = r_aln_locs[loc + event_len]
-                if mut_bottom_range and (mut_bottom_range < rp.mut_bottom_range):
-                    rp.mut_bottom_range = mut_bottom_range
-                if mut_top_range and (mut_top_range > rp.mut_top_range):
-                    rp.mut_top_range = mut_top_range
-
-                if event_type == 1:    # insertion
-                    ins_str = read.query_sequence[q_loc : q_loc + event_len]
-                    if loc > 0:  # if the insertion does not occur before ref starts
-                        rp.add_insertion(r_aln_locs[loc - 1], ins_str)
-
-                else:  # deletion
-                    del_str = ref_seq[r_loc : r_loc + event_len]
-                    is_mmej, microhomology = check_microhomology(ref_seq, r_loc, event_len)
-                    rp.add_deletion(r_loc, event_len, del_str, is_mmej, microhomology)
+            elif event_type == 2:  # deletion
+                mut_ranges.extend([r_loc, r_aln_locs[loc + event_len]])
+                del_str = ref_seq[r_loc : r_loc + event_len]
+                is_mmej, microhomology = check_microhomology(ref_seq, r_loc, event_len)
+                rp.add_deletion(r_loc, event_len, del_str, is_mmej, microhomology)
 
             else:
                 print("Cigar type %s is not implemented. Skip this read: %s"%(event_type, cigar_))
@@ -403,10 +391,14 @@ def mutation_pattern(read, ref_seq, break_index, margin, mismatch_cutoff=1):
 
         loc += event_len  # update current loc
 
+    mut_ranges = [i for i in mut_ranges if i]
+    if mut_ranges:
+        rp.mut_bottom_range = min(mut_ranges)
+        rp.mut_top_range = max(mut_ranges)
+    else:
     # if the mismatch > mismatch_cutoff, but there are no other mutation events within break +/- margin
     # then the mut_bottom_range or mut_top_range may have not been changed. However, it's likely
     # sequencing error, we are going to ignore this read.
-    if (rp.mut_bottom_range ==  len(ref_seq))or (rp.mut_bottom_range == -1):
        return "skipped"
 
     return rp
