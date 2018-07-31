@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import sys
+import math
 from Bio import pairwise2
 from Bio import SeqIO
 from Bio.pairwise2 import format_alignment
@@ -86,7 +87,7 @@ def choose_aln(alns, break_index):
     return candidate_aln, cigar
 
 
-def align(X, Y, break_index, idx, score_min=0, match=2, mismatch=-6, gap_open=-5, gap_extension=-2):
+def align(X, Y, break_index, idx, score_min=(20, 8), match=2, mismatch=-6, gap_open=-5, gap_extension=-2):
     '''
     align record X and record Y, generate a SAM format entry
     Args:
@@ -94,6 +95,7 @@ def align(X, Y, break_index, idx, score_min=0, match=2, mismatch=-6, gap_open=-5
         Y: query sequence in Biopython sequence record format
         break_index: the position of break
         idx: the record index. It's for keep tracking of how many records the program has processed
+        score_min: score function, y = a + b * ln(ref_seq)
         match: match bonus
         mismatch: mismatch penalty
         gap_open: gap open penalty
@@ -112,7 +114,9 @@ def align(X, Y, break_index, idx, score_min=0, match=2, mismatch=-6, gap_open=-5
     tlen = "0"
     qual = "*"
 
-    fw_alns = pairwise2.align.globalms(X, Y , match, mismatch, gap_open, gap_extension)
+    score_min = score_min[0] + score_min[1] * math.log(len(X))
+
+    fw_alns = pairwise2.align.globalms(X.seq, Y.seq, match, mismatch, gap_open, gap_extension)
     rc_alns = pairwise2.align.globalms(X.seq, Y.seq.reverse_complement(),
                                   match, mismatch, gap_open, gap_extension)
 
@@ -127,7 +131,7 @@ def align(X, Y, break_index, idx, score_min=0, match=2, mismatch=-6, gap_open=-5
         seq = str(Y.seq.reverse_complement())
 
     aln, cigar = choose_aln(alns, break_index)
-    consumed_bases = re.finditer('([^DNHP]+)', ''.join(cigar))
+    #consumed_bases = re.finditer('([^DNHP]+)', ''.join(cigar))
     #pos = str(consumed_bases.next().start() + 1)  # 1-based index
     pos = "1"
 
