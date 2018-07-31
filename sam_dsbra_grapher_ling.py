@@ -34,13 +34,15 @@ def parse_files(summary_fns):
 
     for summary_fn in summary_fns:
         with open(summary_fn,'r') as sf:
-            sample_count_list[summary_fn] = int(sf.readline()[1:])
+            sample_count_list[summary_fn] = 0
 
-            data = list(csv.DictReader(sf,delimiter='\t'))
+            data = list(csv.DictReader(sf, delimiter='\t'))
             #formatting of all fields appropriately
             for x in data:
                 x['insertion_seqs'] = ast.literal_eval(x['insertion_seqs'])
+                x['deletion_sequences'] = ast.literal_eval(x['deletion_sequences'])
                 x['deletion_lens'] = ast.literal_eval(x['deletion_lens'])
+                x['num_mismatch'] = int(x['num_transitions'])
                 x['num_transitions'] = int(x['num_transitions'])
                 x['num_deletions'] = int(x['num_deletions'])
                 x['num_insertions'] = int(x['num_insertions'])
@@ -49,6 +51,7 @@ def parse_files(summary_fns):
                 x['deletion_is_micro'] = ast.literal_eval(x['deletion_is_micro'])
                 x['micro_seq'] = ast.literal_eval(x['micro_seq'])
                 x['count'] = int(x['count'])
+                sample_count_list[summary_fn] += x['count']
 
             samples[summary_fn] = data
 
@@ -57,12 +60,12 @@ def parse_files(summary_fns):
 
 def get_mutation_event_freq(df, summary_fn):
     def assign_mutation_type(x):
-        if x['num_deletions'] + x['num_insertions'] > 1:
-            # More than 1 deletion or more than 1 insertion or a mix of deletions and insertions
+        if int(bool(x['num_deletions'])) + int(bool(x['num_insertions'])) + int(bool(x['num_mismatch'])) > 1:
+            # a mix of deletions, insertions and mismatch
             return 'Compound'
-        elif x['num_deletions'] == 1:
+        elif x['num_deletions']:
             return 'Deletion'
-        elif x['num_insertions'] == 1:
+        elif x['num_insertions']:
             return 'Insertion'
         elif x['num_mismatch']:
             return 'Mismatch'
@@ -73,6 +76,7 @@ def get_mutation_event_freq(df, summary_fn):
     count_d = {}
     count_d['Compound'] = df[df['mutation_type'] == 'Compound']['count'].sum()
     count_d['Deletion'] = df[df['mutation_type'] == 'Deletion']['count'].sum()
+    count_d['Insertion'] = df[df['mutation_type'] == 'Insertion']['count'].sum()
     count_d['Mismatch'] = df[df['mutation_type'] == 'Mismatch']['count'].sum()
     dft = pd.DataFrame(count_d.items(), columns=['mutation_type', 'count'])
     num_wt = sample_count_list[summary_fn] - dft['count'].sum()
@@ -100,18 +104,23 @@ def seq_counts(df, mode='deletion'):
         count = row['count']
 
         if mode == 'deletion':
-            seqs = re.findall('\^\(.*?\)', row['repair_sequence'])
+            seqs = row['deletion_sequences']
+            #seqs = re.findall('\^\(.*?\)', row['repair_sequence'])
             for seq in seqs:
-                seq = seq[2:-1]
                 count = seq_del_counts.get(seq, 0) + row['count']
                 seq_del_counts[seq] = count
 
         elif mode == 'insertion':
-            seqs = re.findall('\[.*?\]', row['repair_sequence'])
+            seqs = row['insertion_seqs']
+            #seqs = re.findall('\[.*?\]', row['repair_sequence'])
             for seq in seqs:
-                seq = seq[1:-1]
                 count = seq_del_counts.get(seq, 0) + row['count']
                 seq_del_counts[seq] = count
+
+        elif mode == 'repair_seq':
+            seq = row['repair_sequence']
+            count = seq_del_counts.get(seq, 0) + row['count']
+            seq_del_counts[seq] = count
 
         else:
             raise NotImplementedError
@@ -154,6 +163,8 @@ if __name__ == '__main__':
                             help="plot Frequency of Insertions by Length")
     arg_parser.add_argument("--ins_seq", action='store_true',
                             help="plot Sequences with Insertion Event")
+    arg_parser.add_argument("--repair_seq", action='store_true',
+                            help="plot top most common repair sequences")
 
     args = arg_parser.parse_args()
 
@@ -231,5 +242,11 @@ if __name__ == '__main__':
             seq_with_ins_outplot = os.path.join(output_dir,
                                               '%s_sequences_with_insertion_events.png'%summary_name)
             subprocess.call("%s --input %s --ins_seq"%(r, seq_with_ins_outfn), shell=True)
+
+        if args.repair_seq or args.all:
+            dft = seq_counts(df, mode='repair_seq')
+            repair_pattern_outfn = os.path.join(output_dir, '%s_sequences_with_mutation_events.csv'%summary_name)
+            dft.to_csv(repair_pattern_outfn)
+            subprocess.call("%s --input %s --repair_seq"%(r, repair_pattern_outfn), shell=True)
 
         print("\nComplete!")
