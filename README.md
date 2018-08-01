@@ -1,5 +1,5 @@
 # dsbra
-Double Strand Break Analysis Program
+Double Strand Break Analysis Program <br>
 Analyze .fastq files for insertions, deletions, and microhomologous end joining at specified break site within reference sequence. Example output:
 <p align="center">
   <img src="https://github.com/lingchen42/dsbra/blob/master/example_plots/test_run_repair_pattern_summary_table_aligned_mutations.png"/>
