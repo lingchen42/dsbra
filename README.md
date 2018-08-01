@@ -5,12 +5,12 @@ Analyze .fastq files for insertions, deletions, and microhomologous end joining 
   <img src="https://github.com/lingchen42/dsbra/blob/master/example_plots/test_run_repair_pattern_summary_table_aligned_mutations.png"/>
 </p>
 
-## Run On ACCRE
-**1. Load necessary packages with LMOD.**
+## Usage
+**1. Load necessary programs** (Here I use LMOD, which is applied to running this on vanderbilt ACCRE cluster.)
 ```
 ml Intel git Anaconda2
 ```
-**2. Clone the git repo to ACCRE and cd into the directory** (This step only needs to be done the first time.)
+**2. Clone the git repo and cd into the directory** (This step only needs to be done the first time.)
 ```
 git clone https://github.com/lingchen42/dsbra.git
 cd dsbra
