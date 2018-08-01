@@ -114,7 +114,7 @@ The plots will be in `example_outputs` directory. <br>
 source deactivate
 ```
 
-## An example resulting plot.
+## An example of resulting plots
 
 ![aligned mutation events](https://github.com/lingchen42/dsbra/blob/master/example_plots/test_run_repair_pattern_summary_table_aligned_mutations.png)
 
