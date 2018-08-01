@@ -100,19 +100,13 @@ optional arguments:
 
 ```
 _Example use:_<br>
-If we want to plot Mutation Event Frequency by Type, use: <br>
-```
-./sam_dsbra_grapher_ling.py -i example_outputs/RIF1_NFR_output.txt -o example_outputs/ --mut_type
-```
-The Mutation Event Frequency by Type plot will be `example_outputs/RIF1_NFR_output_mutation_event_frequency_by_type.png`. <br>
-<br>
 If we want to plot all types of plots: <br>
 ```
 ./sam_dsbra_grapher_ling.py -i example_outputs/RIF1_NFR_output.txt -o example_outputs/ --all
 ```
 The plots will be in `example_outputs` directory. <br>
 
-7. Finally, exit the virtual environment
+**7. Finally, exit the virtual environment**
 ```
 source deactivate
 ```
