@@ -85,6 +85,16 @@ optional arguments:
   --ins_len             plot Frequency of Insertions by Length
   --ins_seq             plot Sequences with Insertion Event
   --repair_seq          plot top most common repair sequences
+  --aligned_mutations   plot frequency and aligned mutations
+  --ref_bottom REF_BOTTOM
+                        the start reference base to show aligned mutation
+                        events; default 0
+  --ref_top REF_TOP     the start reference base to show aligned mutation
+                        events; default 171
+  --break_index BREAK_INDEX
+                        the index of break site; required when using 
+                        aligned_mutations  
+
 ```
 Example use:
 If we want to plot Mutation Event Frequency by Type, use: <br>
