@@ -57,9 +57,12 @@ class RepairPattern:
         self.repair_size = 0
 
         self.repair_sequence = ''
+        self.repair_cigar_tuples = []
 
         self.mut_bottom_range = reference_end  # for the first comparison
         self.mut_top_range = -1  # for the first comparison
+        self.ref_mut_start = 0
+        self.ref_mut_end  = reference_end
 
         self.mismatch_locations = [ ]
         self.new_mismatch_bases = [ ]
@@ -117,6 +120,10 @@ class RepairPattern:
         r_aln_locs = list(r_aln_locs)
         mut_start = self.mut_bottom_range
         mut_end = self.mut_top_range
+        self.ref_mut_start = r_aln_locs[mut_start]
+        if not self.ref_mut_start:  # in case of insertion, it will be NaN
+            self.ref_mut_start = r_aln_locs[mut_start-1]
+        self.ref_mut_end = r_aln_locs[mut_end]
 
         # cigar_d = {1:"insertion", 2:"deletion", 7:"matched", 8:"mismatched"}  # cannot deal with other status
         cigar_tuples = read.cigartuples
@@ -148,6 +155,7 @@ class RepairPattern:
                 sys.exit(1)
             loc += event_len
 
+        self.repair_cigar_tuples = cigar_tuples_in_region
         self.repair_sequence = repair_seq
 
 
@@ -204,14 +212,14 @@ def aln(sam_filename, ref_fa, fastq_name, break_index, run_metadata, output_dir,
     return run_metadata
 
 
-def mut_within_margin(sam_filename, mut_bamfile_name, non_mut_bamfile_name,
+def mut_within_margin(sam_filename, mut_bamfile_name, non_mut_samfile_name,
                       break_index, margin, run_metadata):
     '''
     Reads with mutation within margin.
     Args:
         sam_filename: alignment file
         mut_bamfile_name: mutated reads bamfile name
-        non_mut_bamfile_name: not mutated reads bamfile name
+        non_mut_samfile_name: not mutated reads bamfile name
         run_metadata: run_metadata dictionary. For recording average coverage of
                       bases within margin and number of qualified reads.
     Returns:
@@ -225,6 +233,7 @@ def mut_within_margin(sam_filename, mut_bamfile_name, non_mut_bamfile_name,
     # VERSION 0.0.4 -- Mutational database now incorporates
     # First pass on SAM/BAM file creates secondary file
     # with all reads requiring further evaluation (non-WT within margin)
+    reads_list = [ ]
     mut_reads_list = [ ]
 
     if os.path.exists(mut_bamfile_name):
@@ -250,6 +259,7 @@ def mut_within_margin(sam_filename, mut_bamfile_name, non_mut_bamfile_name,
 
         for pileupread in pileupcolumn.pileups:
             qname = pileupread.alignment.query_name
+            reads_list.append(qname)
 
             if qname in mut_reads_list:
                 continue
@@ -269,8 +279,21 @@ def mut_within_margin(sam_filename, mut_bamfile_name, non_mut_bamfile_name,
                 mut_reads_list.append(qname)
                 mut_bamfile.write(pileupread.alignment)
 
+    non_mut_reads_list = list(set(reads_list) - set(mut_reads_list))
+    non_mut_fh, non_mut_path = tempfile.mkstemp()
+    try:
+        with os.fdopen(non_mut_fh, 'w') as tmp:
+            print("Writing reads without mutations within range to file %s"%non_mut_samfile_name)
+            for r in non_mut_reads_list:
+                tmp.write(r+"\n")
+        cmd = 'grep -f %s %s > %s'%(non_mut_path, sam_filename, non_mut_samfile_name)
+        subprocess.call(cmd, shell=True)
+    finally:
+        os.remove(non_mut_path)
+
     run_metadata['coverage'] = int(np.mean(coverage_list))
     run_metadata['num_reads_with_mutations_within_range'] = len(mut_reads_list)
+    run_metadata['num_reads_without_mutations_within_range'] = len(non_mut_reads_list)
 
     #Close and sort/index new bamfile
     mut_bamfile.close()
@@ -280,10 +303,6 @@ def mut_within_margin(sam_filename, mut_bamfile_name, non_mut_bamfile_name,
         subprocess.call(SAMTOOLS_FOLDER+'samtools index '+ mut_bamfile_name + '.sorted.bam ' + mut_bamfile_name + '.sorted.bai',\
             shell=True, stdout = out)
     bamfile.close()
-
-    run_metadata['num_reads_without_mutations_within_range'] = \
-            int(run_metadata['num_success_alignments']) \
-            - run_metadata['num_reads_with_mutations_within_range']
 
     print "First scan and sorting ended. Total time: " + str(time.time()-start_time) + "\n..."
 
@@ -423,6 +442,9 @@ def get_rp(read, ref_seq, rp_entries, break_index, margin):
             rp_entries['deletion_is_micro'].append(rp.deletion_is_microhomologous)
             rp_entries['repair_sequence'].append(rp.repair_sequence)
             rp_entries['micro_seq'].append(rp.deletion_micro)
+            rp_entries['repair_cigar_tuples'].append(rp.repair_cigar_tuples)
+            rp_entries['ref_mut_start'].append(rp.ref_mut_start)
+            rp_entries['ref_mut_end'].append(rp.ref_mut_end)
 
         return rp_entries
 
@@ -470,7 +492,7 @@ if __name__ == '__main__':
     print("")
 
     mut_bamfile_name = os.path.join(output_dir, "%s_mut_reads.sam"%(run_name))
-    non_mut_bamfile_name = os.path.join(output_dir, "%s_non_mut_reads.sam"%(run_name))
+    non_mut_samfile_name = os.path.join(output_dir, "%s_non_mut_reads.sam"%(run_name))
     summary_table_fn = os.path.join(output_dir, "%s_repair_pattern_summary_table.txt"%(run_name))
     if args.full_table:
         repair_pattern_table_fn = os.path.join(output_dir, \
@@ -523,7 +545,7 @@ if __name__ == '__main__':
     if os.path.exists(mut_bamfile_name):
         print("Already filtered for reads with mutations within range in %s"%mut_bamfile_name)
     else:
-        mut_within_margin(sam_filename, mut_bamfile_name, non_mut_bamfile_name,
+        run_metadata = mut_within_margin(sam_filename, mut_bamfile_name, non_mut_samfile_name,
                           break_index, margin, run_metadata)
 
     # analyzing the repair pattern of each read, store in a table
@@ -534,7 +556,8 @@ if __name__ == '__main__':
               'num_transversions', 'num_insertions', 'insertion_locs',
               'insertion_seqs', 'num_deletions', 'deletion_locs',
               'deletion_lens', 'deletion_sequences',
-              'deletion_is_micro', 'micro_seq', 'repair_sequence']
+              'deletion_is_micro', 'micro_seq', 'repair_sequence',
+              'repair_cigar_tuples', 'ref_mut_start', 'ref_mut_end']
     rp_entries = {}
     for f in fields:
         rp_entries[f] = []
@@ -560,9 +583,24 @@ if __name__ == '__main__':
     df = df.drop("read_name", axis=1)
     df['count'] = 1
     df = df.groupby(list(df.columns[:-1]), as_index=False).agg({'count':'sum'})
+
+    # add entry for WT
+    wt_entry = pd.Series()
+    for f in list(df.columns[:-1]):
+        wt_entry[f] = ""
+    wt_entry['ref_mut_start'] = 0
+    wt_entry['ref_mut_end'] = 0
+    try:
+        wt_entry['count'] = run_metadata["num_reads_without_mutations_within_range"]
+    except KeyError:
+        cmd = "wc -l < %s"%non_mut_samfile_name
+        wt_count = int(subprocess.check_output(cmd, shell=True))
+        wt_entry['count'] = wt_count
+    df = df.append(wt_entry, ignore_index=True)
+
+
     df['mut_freq'] = df['count'] / (df['count'].sum())
     df = df.sort_values(by='count', ascending=False)
-    # TO DO mut_freq
     df.to_csv(summary_table_fn, sep='\t', index=False)
 
     # the reads made to the end (repair pattern analyzed reads) can be different

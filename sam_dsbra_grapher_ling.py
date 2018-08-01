@@ -39,18 +39,25 @@ def parse_files(summary_fns):
             data = list(csv.DictReader(sf, delimiter='\t'))
             #formatting of all fields appropriately
             for x in data:
-                x['insertion_seqs'] = ast.literal_eval(x['insertion_seqs'])
-                x['deletion_sequences'] = ast.literal_eval(x['deletion_sequences'])
-                x['deletion_lens'] = ast.literal_eval(x['deletion_lens'])
-                x['num_mismatch'] = int(x['num_transitions'])
-                x['num_transitions'] = int(x['num_transitions'])
-                x['num_deletions'] = int(x['num_deletions'])
-                x['num_insertions'] = int(x['num_insertions'])
-                x['new_mismatch_bases'] = ast.literal_eval(x['new_mismatch_bases'])
-                x['insertion_locs'] = ast.literal_eval(x['insertion_locs'])
-                x['deletion_is_micro'] = ast.literal_eval(x['deletion_is_micro'])
-                x['micro_seq'] = ast.literal_eval(x['micro_seq'])
+                try:
+                    x['insertion_seqs'] = ast.literal_eval(x['insertion_seqs'])
+                    x['deletion_sequences'] = ast.literal_eval(x['deletion_sequences'])
+                    x['deletion_lens'] = ast.literal_eval(x['deletion_lens'])
+                    x['num_mismatch'] = int(x['num_transitions'])
+                    x['num_transitions'] = int(x['num_transitions'])
+                    x['num_deletions'] = int(x['num_deletions'])
+                    x['num_insertions'] = int(x['num_insertions'])
+                    x['new_mismatch_bases'] = ast.literal_eval(x['new_mismatch_bases'])
+                    x['insertion_locs'] = ast.literal_eval(x['insertion_locs'])
+                    x['deletion_is_micro'] = ast.literal_eval(x['deletion_is_micro'])
+                    x['micro_seq'] = ast.literal_eval(x['micro_seq'])
+                    x['repair_cigar_tuples'] = ast.literal_eval(x['repair_cigar_tuples'])
+                except:  # wild type entry
+                    pass
+
                 x['count'] = int(x['count'])
+                x['ref_mut_start'] = int(x['ref_mut_start'])
+                x['ref_mut_end'] = int(x['ref_mut_end'])
                 sample_count_list[summary_fn] += x['count']
 
             samples[summary_fn] = data
@@ -140,6 +147,54 @@ def insertion_len_dist(df):
     return dft
 
 
+def aligned_mut(df):
+    indices = []
+    mut_starts = []
+    mut_ends = []
+    types = []
+    region_lens = []
+    counts = []
+
+    cigar_d = {1:'insertion', 2:'deletion', 7:'matched', 8:'mismatch'}
+    for index, row in df.iterrows():
+        mut_start = row['ref_mut_start']
+        mut_end = row['ref_mut_end']
+        try:
+            repair_cigar_tuples = row['repair_cigar_tuples']
+            loc = mut_start
+            for event_type, event_len in repair_cigar_tuples:
+                indices.append(index)
+                types.append(cigar_d[event_type])
+                mut_starts.append(loc)
+                counts.append(row['count'])
+                region_lens.append(event_len)
+                if event_type == 1:  # insertion does not consume ref bases
+                    mut_ends.append(loc+0.5)  # just to make it visible
+                else:
+                    mut_ends.append(loc+event_len)
+                    loc += event_len
+        except:
+            indices.append(index)
+            mut_starts.append(0)
+            mut_ends.append(0)
+            types.append("matched")
+            region_lens.append(None)
+            counts.append(row['count'])
+
+    dft = pd.DataFrame()
+    dft['idx'] = indices
+    dft['mut_start'] = mut_starts
+    dft['mut_end'] = mut_ends
+    dft['type'] = types
+    dft['region_len'] = region_lens
+    dft['count'] = counts
+
+    return dft
+
+#aligned_mut_outfn = os.path.join(output_dir, 'aligned_mutation_events.csv')
+#dft.to_csv(seq_with_ins_outfn)
+
+
 if __name__ == '__main__':
     # parse args
     arg_parser = argparse.ArgumentParser(description="Visualize Mutation Events")
@@ -165,11 +220,22 @@ if __name__ == '__main__':
                             help="plot Sequences with Insertion Event")
     arg_parser.add_argument("--repair_seq", action='store_true',
                             help="plot top most common repair sequences")
+    arg_parser.add_argument("--aligned_mutations", action='store_true',
+                            help="plot frequency and aligned mutations")
+    arg_parser.add_argument("--ref_bottom", default=0, type=int,
+                            help="the start reference base to show aligned mutation events")
+    arg_parser.add_argument("--ref_top", default=171, type=int,
+                            help="the start reference base to show aligned mutation events")
+    arg_parser.add_argument("--break_index", type=int, default=None,
+                            help="the index of break site")
 
     args = arg_parser.parse_args()
 
     # R script name
     r = args.R
+    break_index = args.break_index
+    ref_top = args.ref_top
+    ref_bottom = args.ref_bottom
 
     # read in data
     summary_fns = args.input_files
@@ -248,5 +314,15 @@ if __name__ == '__main__':
             repair_pattern_outfn = os.path.join(output_dir, '%s_sequences_with_mutation_events.csv'%summary_name)
             dft.to_csv(repair_pattern_outfn)
             subprocess.call("%s --input %s --repair_seq"%(r, repair_pattern_outfn), shell=True)
+
+        if args.aligned_mutations or args.all:
+            if break_index:
+                dft = aligned_mut(df)
+                aligned_mut_outfn = os.path.join(output_dir, '%s_aligned_mutation_events.csv'%summary_name)
+                dft.to_csv(aligned_mut_outfn)
+                subprocess.call("%s --input %s --aligned_mutations --break_index %s --ref_bottom %s --ref_top %s"\
+                                %(r, aligned_mut_outfn, break_index, ref_bottom, ref_top), shell=True)
+            else:
+                print("Error generating alignment plot. Please provide break index using --break_index.")
 
         print("\nComplete!")

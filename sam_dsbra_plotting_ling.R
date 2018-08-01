@@ -14,7 +14,7 @@ option_list <- list(
     make_option("--del_seq", action='store_true', default=FALSE,
                 help="plot sequences_with_deletion_events.csv\
                 plot Sequences with Deletion Event"),
-    make_option("--min_count", default=50,
+    make_option("--min_count", default=100,
                 help="determine how the minimum counts to include in\
                       Sequences with Deletion/Insertion/Mutation Event"),
     make_option("--ins_len", action='store_true', default=FALSE,
@@ -25,7 +25,16 @@ option_list <- list(
                 plot Sequences with Insertion Event"),
     make_option("--repair_seq", action='store_true', default=FALSE,
                 help="plot sequences_with_mutation_events.csv\
-                plot Sequences with Mutation Event")
+                plot Sequences with Mutation Event"),
+    make_option("--aligned_mutations", action='store_true', default=FALSE,
+                help="plot aligned_mutation_events.csv\
+                plot mutation events aligned with the reference sequence"),
+    make_option("--ref_bottom", default=0, type="integer",
+                help="the start reference base to show aligned mutation events"),
+    make_option("--ref_top", type="integer",
+                help="the end reference base to show aligned mutation events"),
+    make_option("--break_index", type="integer",
+                help="the index of break site")
     )
 opt <- parse_args(OptionParser(option_list=option_list))
 
@@ -34,7 +43,7 @@ df <- read.csv(opt$input)
 basename <- tools::file_path_sans_ext(opt$input)
 
 # output name
-outname <- sprintf('%s.png', basename)
+outname <- sprintf('%s.pdf', basename)
 print(sprintf('Writing to %s', outname))
 
 min_count <- opt$min_count
@@ -124,4 +133,77 @@ if (opt$repair_seq){
           axis.text=element_text(size=16*20/nrow(df))) +
     coord_flip(ylim = c(0, max(df$count) * 1.2))
     tryCatch(ggsave(filename=outname, plot=p), error= function(err){print('repair patterns fails')})
+}
+
+# Aligned mutation events
+if (opt$aligned_mutations){
+    ref_seq_range <- c(opt$ref_bottom, opt$ref_top)
+    break_index <- opt$break_index
+    mut_size_font <- 1.5
+    mut_size_hjust <- -3
+    aspect_scale <- 0.005
+
+    # prepare table
+    df <- df[, 2:7]
+    # because if mut_start = 85, then it will cover [85,86].
+    # If break site is 84, then it is marked at [83, 84] | [84,85].
+    # so we want to mark the mutation happened at 85, as [84, 85]
+    df$mut_start <- df$mut_start - break_index - 1
+    df$mut_end <- df$mut_end - break_index - 1
+
+    x_start <- ref_seq_range[1] - break_index
+    x_end <- ref_seq_range[1] + break_index
+    x_interval <- 5
+    # make sure 0bp is shown on the plot
+    while ((0 - x_start) %% 5){
+        x_start <- x_start - 1
+    }
+
+    df2 <- data.frame(idx = df$idx,
+                      mut_start = rep(ref_seq_range[1], nrow(df)) - break_index,
+                      mut_end = rep(ref_seq_range[2], nrow(df)) - break_index,
+                      type = rep('matched', nrow(df)),
+                      region_len = NA,
+                      count = df$count)
+
+    dft <- rbind(df2, df)
+    dft <- subset(dft, count > min_count)
+    dft$idx <- max(dft$idx) - dft$idx  # top to bottom. common to rare
+    p1 <- ggplot(dft, aes(xmin = mut_start, xmax = mut_end, ymin = idx + 0.1, ymax = idx + 0.9)) +
+                 geom_rect(aes(fill = type)) +
+                 geom_vline(xintercept = 0, color="red", linetype=3) +
+                 geom_text(aes(x = mut_start+mut_size_hjust, y = idx+0.5, label=region_len), size=mut_size_font) +
+                 labs(x="bp from cut site", y="") +
+                 scale_x_continuous(breaks=seq(x_start, x_end, x_interval)) +
+                 scale_y_continuous(breaks=seq(0, max(dft$idx)+2, 1)) +
+                 annotate("text", label = "cut site", x = 0 , y =  max(dft$idx) + 2 , color = "black") +
+                 scale_fill_manual(values = c("matched"="grey", "deletion"="black", "insertion"="blue", "mismatch"="red")) +
+                 theme(aspect.ratio =  aspect_scale * nrow(dft),
+                 legend.position="bottom",
+                 panel.background = element_blank(),
+                 axis.text.x= element_text(size=8),
+                 axis.line.x =element_line(color="black"),
+                 axis.text.y= element_blank(),
+                 axis.ticks.y=element_blank())
+
+    dft2 <- subset(dft, mut_start!=-break_index)  #get the mutation events
+    dft2 <- unique(dft2[, c('idx', 'count')])
+    p2 <- ggplot(dft2, aes(x=idx, y=count, label=count)) +
+                 geom_bar(stat="identity") +
+                 geom_text(hjust=-0.2, size=1) +
+                 ylim(0, 1.15*max(dft2$count)) +
+                 theme(aspect.ratio = 5,
+                       panel.background = element_blank(),
+                       axis.title.y = element_blank(),
+                       axis.text.x= element_text(size=6),
+                       axis.line.x =element_line(color="black"),
+                       axis.text.y= element_blank(),
+                       axis.ticks.y=element_blank(),
+                       plot.margin=grid::unit(c(0,0,0,0), "mm")) +
+                 coord_flip()
+
+    outname2 <- sprintf('%s_freq.pdf', basename)
+    ggsave(filename=outname, plot=p1)
+    print(sprintf('Writing to %s', outname2))
+    ggsave(filename=outname2, plot=p2)
 }
