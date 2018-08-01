@@ -1,6 +1,9 @@
 # dsbra
 Double Strand Break Analysis Program
-Analyze .fastq files for insertions, deletions, and microhomologous end joining at specified break site within reference sequence.
+Analyze .fastq files for insertions, deletions, and microhomologous end joining at specified break site within reference sequence. Example output:
+<p align="center">
+  <img src="https://github.com/lingchen42/dsbra/blob/master/example_plots/test_run_repair_pattern_summary_table_aligned_mutations.png"/>
+</p>
 
 ## Run On ACCRE
 1. Load necessary packages with LMOD.
@@ -113,10 +116,6 @@ The plots will be in `example_outputs` directory. <br>
 ```
 source deactivate
 ```
-
-## An example of resulting plots
-
-![aligned mutation events](https://github.com/lingchen42/dsbra/blob/master/example_plots/test_run_repair_pattern_summary_table_aligned_mutations.png)
 
 
 ## Original Documentation
