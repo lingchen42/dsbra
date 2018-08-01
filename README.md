@@ -114,6 +114,11 @@ The plots will be in `example_outputs` directory. <br>
 source deactivate
 ```
 
+## An example resulting plot.
+
+![aligned mutation events](https://github.com/lingchen42/dsbra/blob/master/example_plots/test_run_repair_pattern_summary_table_aligned_mutations.png)
+
+
 ## Original Documentation
 Use:
 1. Must install samtools AND bowtie2 OR bwa aligner and edit approprite paths within sam_dsbra_interface.py if not in your PATH variable.
