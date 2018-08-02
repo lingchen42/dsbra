@@ -159,6 +159,25 @@ class RepairPattern:
         self.repair_sequence = repair_seq
 
 
+def get_ref(ref_fa):
+    with open(ref_fa, 'r') as ref_fasta:
+        ref_fasta = open(ref_fa,'r')
+        ref_fasta_str = ref_fasta.read()
+        index_ref_fn = os.path.join(output_dir, '%s_ref.fa'%run_name)
+        with open(index_ref_fn, 'w') as index_ref:
+            first_seq = RE_FASTA.match(ref_fasta_str)
+            ref_name = ''
+            ref_seq = ''
+            if first_seq:
+                ref_name, ref_seq = first_seq.groups(0)
+                ref_seq = re.sub(r'[\n\r]','',ref_seq).upper()
+                index_ref.write('>'+ref_name+'\n'+ref_seq+'\n')
+            else:
+                raise EOFError('FASTA sequence not detected before end of file.'\
+                               + str(ref_fa))
+    return ref_seq
+
+
 def aln(sam_filename, ref_fa, fastq_name, break_index, run_metadata, output_dir,
         record_failed_alignment=True):
     '''
@@ -449,6 +468,35 @@ def get_rp(read, ref_seq, rp_entries, break_index, margin):
         return rp_entries
 
 
+def get_summary_table(summary_table_fn, repair_pattern_table_fn, run_metadata,
+                      non_mut_samfile_name):
+    print("Writing summary table to %s \n"%summary_table_fn)
+    df = pd.read_table(repair_pattern_table_fn)  # this solves the problem caused by a python list in a cell, otherwise it cannot be grouped appropriately
+    df = df.drop("read_name", axis=1)
+    df['count'] = 1
+    df = df.groupby(list(df.columns[:-1]), as_index=False).agg({'count':'sum'})
+
+    # add entry for WT
+    wt_entry = pd.Series()
+    for f in list(df.columns[:-1]):
+        wt_entry[f] = ""
+    wt_entry['ref_mut_start'] = 0
+    wt_entry['ref_mut_end'] = 0
+    try:
+        wt_entry['count'] = run_metadata["num_reads_without_mutations_within_range"]
+    except KeyError:
+        cmd = "wc -l < %s"%non_mut_samfile_name
+        wt_count = int(subprocess.check_output(cmd, shell=True))
+        wt_entry['count'] = wt_count
+    df = df.append(wt_entry, ignore_index=True)
+
+
+    df['mut_freq'] = df['count'] / (df['count'].sum())
+    df = df.sort_values(by='count', ascending=False)
+    df.to_csv(summary_table_fn, sep='\t', index=False)
+
+    return df
+
 if __name__ == '__main__':
     # parse args
     arg_parser = argparse.ArgumentParser(description="Double strand break repair analyzer (DSBRA)")
@@ -509,22 +557,7 @@ if __name__ == '__main__':
 
 
     # read in reference fasta, write to new file after checking filetype
-    with open(ref_fa, 'r') as ref_fasta:
-        ref_fasta = open(ref_fa,'r')
-        ref_fasta_str = ref_fasta.read()
-        index_ref_fn = os.path.join(output_dir, '%s_ref.fa'%run_name)
-        with open(index_ref_fn, 'w') as index_ref:
-            first_seq = RE_FASTA.match(ref_fasta_str)
-            ref_name = ''
-            ref_seq = ''
-            if first_seq:
-                ref_name, ref_seq = first_seq.groups(0)
-                ref_seq = re.sub(r'[\n\r]','',ref_seq).upper()
-                index_ref.write('>'+ref_name+'\n'+ref_seq+'\n')
-            else:
-                raise EOFError('FASTA sequence not detected before end of file.'\
-                               + str(ref_fa))
-
+    ref_seq = get_ref(ref_fa)
 
     # store run info
     run_metadata = [('timestamp', str(datetime.now())),
@@ -578,31 +611,8 @@ if __name__ == '__main__':
         df.to_csv(repair_pattern_table_fn, sep="\t", index=False)
 
     # generate summary table of reads. Groups reads with the same repair pattern
-    print("Writing summary table to %s \n"%summary_table_fn)
-    df = pd.read_table(repair_pattern_table_fn)  # this solves the problem caused by a python list in a cell, otherwise it cannot be grouped appropriately
-    df = df.drop("read_name", axis=1)
-    df['count'] = 1
-    df = df.groupby(list(df.columns[:-1]), as_index=False).agg({'count':'sum'})
-
-    # add entry for WT
-    wt_entry = pd.Series()
-    for f in list(df.columns[:-1]):
-        wt_entry[f] = ""
-    wt_entry['ref_mut_start'] = 0
-    wt_entry['ref_mut_end'] = 0
-    try:
-        wt_entry['count'] = run_metadata["num_reads_without_mutations_within_range"]
-    except KeyError:
-        cmd = "wc -l < %s"%non_mut_samfile_name
-        wt_count = int(subprocess.check_output(cmd, shell=True))
-        wt_entry['count'] = wt_count
-    df = df.append(wt_entry, ignore_index=True)
-
-
-    df['mut_freq'] = df['count'] / (df['count'].sum())
-    df = df.sort_values(by='count', ascending=False)
-    df.to_csv(summary_table_fn, sep='\t', index=False)
-
+    df = get_summary_table(summary_table_fn, repair_pattern_table_fn, run_metadata,
+                      non_mut_samfile_name)
     # the reads made to the end (repair pattern analyzed reads) can be different
     # from reads_with_mutations_within_range
     # because some reads can only mismatches within range, but not immediately close to break index and got filtered out
