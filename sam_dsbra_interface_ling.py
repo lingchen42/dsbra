@@ -1,5 +1,6 @@
 '''
 2018-07-31 Ling Chen
+Double strand break repair analyzer (DSBRA)
 Major changes
 1. This script uses a customed aligner that chooses the alignment with
    mutations closest to the break site. Original aligner uses bowtie2
@@ -8,47 +9,32 @@ Major changes
    The original script does not.
 3. Also includes the count of wildtypes.
 
-usage: sam_dsbra_interface_ling.py [-h] -o OUT_DIR [--run_name RUN_NAME]
+Usage: sam_dsbra_interface_ling.py [-h] -o OUT_DIR [--run_name RUN_NAME]
                                    [-r REF_FA] [-q FASTQ] [-b BREAK_INDEX]
-                                   [-m MARGIN] [--full_table]
-
-Double strand break repair analyzer (DSBRA)
-optional arguments:
-    -h, --help            show this help message and exit
-    -o OUT_DIR, --out_dir OUT_DIR
-                          output directory
-    --run_name RUN_NAME   will be the prefix of output file names
-    -r REF_FA, --ref_fa REF_FA
-                          path of the reference sequence fasta file
-    -q FASTQ, --fastq FASTQ
-                          path of the reads to analyze in fastq format
-    -b BREAK_INDEX, --break_index BREAK_INDEX
-                          break index. 0-indexed, the position of nucleotide
-                          right before the break site.
-    -m MARGIN, --margin MARGIN
-                          the margin before and after the break index that
-                          should be considered for analysis
-    --full_table          Will generate a large table with repair pattern for
-                          each read analyzed
+                                   [-m MARGIN] [-qm Q_REPAIR_MARGIN]
+                                   [--last_margin LAST_MARGIN]
+                                   [--count_cutoff COUNT_CUTOFF COUNT_CUTOFF]
+                                   [--full_table]
 '''
 
-import sys
-import argparse
-from itertools import groupby
-import re
-import subprocess
-import pysam
-import cPickle
+from __future__ import division
 import os
-import tempfile
-import shutil
-import numpy as np
-import csv
-from scipy.stats import norm
+import re
+import sys
 import time
+import shutil
+import argparse
+import cPickle
+import tempfile
+import subprocess
+from itertools import groupby
 from datetime import datetime
 from collections import OrderedDict
+
+import pysam
+import numpy as np
 import pandas as pd
+from scipy.stats import poisson
 
 SAMTOOLS_FOLDER = ''
 #CIGAR_RE = re.compile('\d+[MIDNSHP]')
@@ -518,9 +504,8 @@ def get_rp(read, ref_seq, rp_entries, break_index, margin):
         return rp_entries
 
 
-def get_summary_table(summary_table_fn, repair_pattern_table_fn, run_metadata,
+def get_summary_table(repair_pattern_table_fn, run_metadata,
                       non_mut_samfile_name):
-    print("Writing summary table to %s \n"%summary_table_fn)
 
     # Reading the table from file solves the problem caused by a python list in
     # a cell. Otherwise it cannot be grouped appropriately
@@ -550,9 +535,23 @@ def get_summary_table(summary_table_fn, repair_pattern_table_fn, run_metadata,
 
     df['mut_freq'] = df['count'] / (df['count'].sum())
     df = df.sort_values(by='count', ascending=False)
-    df.to_csv(summary_table_fn, columns=cols_order, sep='\t', index=False)
+    df = df[cols_order]
 
     return df
+
+
+def apply_count_cutoff(df, run_metadata, p=0.001, num_colony=300):
+    '''
+    based on poisson distribution, apply count cutoff to the data
+    '''
+    total_reads = int(run_metadata['num_failed_alignments']) \
+                  + int(run_metadata['num_success_alignments'])
+    expected_reads = total_reads / num_colony
+    count_cutoff = poisson.ppf(p, expected_reads)
+    print("Using %s as count cutoff\n"%round(count_cutoff, 2))
+    df = df[df['count'] >= count_cutoff]
+    return df
+
 
 if __name__ == '__main__':
     # parse args
@@ -579,9 +578,14 @@ if __name__ == '__main__':
                                  "in the repaired_read_sequence; default 5bp.")
     arg_parser.add_argument("--last_margin", type=int, default=5,
                             help="the margin outside of the last mutation event"
-                            "that should be included in the repair sequence"
-                            "pattern for those compound mutation events"
-                            "; default 5bp")
+                                "that should be included in the repair sequence"
+                                "pattern for those compound mutation events"
+                                "; default 5bp")
+    arg_parser.add_argument("--count_cutoff", nargs=2, type=float, default=None,
+                            help="take probability cutoff, number of colonies,"
+                                 "apply count cutoff to the summary table"
+                                 "based on the poisson distribution;"
+                                 "default 0.001, 300")
     arg_parser.add_argument("--full_table", action="store_true",
                             help="Will generate a large table with"
                                  "repair pattern for each analyzed")
@@ -677,12 +681,22 @@ if __name__ == '__main__':
         df.to_csv(repair_pattern_table_fn, sep="\t", index=False)
 
     # generate summary table of reads. Groups reads with the same repair pattern
-    df = get_summary_table(summary_table_fn, repair_pattern_table_fn,
+    df = get_summary_table(repair_pattern_table_fn,
                            run_metadata, non_mut_samfile_name)
     # the reads made to the end (repair pattern analyzed reads) can be different
     # from reads_with_mutations_within_range
     # because some reads can only mismatches within range, but not immediately close to break index and got filtered out
     run_metadata['Repair pattern analyzed reads'] = df['count'].sum()
+
+    # apply count cutoff
+    if args.count_cutoff:
+        print("\nApply count cutoff...")
+        df = apply_count_cutoff(df, run_metadata,
+                                p=args.count_cutoff[0],
+                                num_colony=args.count_cutoff[1])
+
+    print("Writing summary table to %s \n"%summary_table_fn)
+    df.to_csv(summary_table_fn, sep='\t', index=False)
 
     # write run metadata
     print("Writing run metadata to %s\n"%(run_info))
