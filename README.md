@@ -23,7 +23,7 @@ conda env create -n dsbra -f dsbra_conda.yml
 ```
 source activate dsbra
 ```
-**5. Run the `sam_dsbra_interface_ling.py` to infer the mutation events**
+**5. Run the `sam_dsbra_interface_ling.py` to infer the repair patterns**
 ```
 python sam_dsbra_interface_ling.py [-h] -o OUT_DIR [--run_name RUN_NAME]
                                    [-r REF_FA] [-q FASTQ] [-b BREAK_INDEX]
@@ -46,7 +46,7 @@ optional arguments:
                           the margin before and after the break index that
                           should be considered for analysis
     --full_table          Will generate a large table with repair pattern for
-                          each analyzed
+                          each read analyzed
 ```
 _Example use:_
 ```
