@@ -35,7 +35,7 @@ def aln2cigar(aln):
     return cigar
 
 
-def cal_edge_distance(aln, break_index):
+def cal_edge_distance(aln, ref_seq, break_index):
     ref_aln = aln[0]
     query_aln = aln[1]
 
@@ -48,7 +48,7 @@ def cal_edge_distance(aln, break_index):
 
     cigar = aln2cigar(aln)
     muts = re.finditer('([^=]+)', ''.join(cigar))
-    edge_distance = 2 * break_index
+    edge_distance = len(ref_seq)
     for m in muts:
         if (m.start() < break_index) and (m.end() > break_index):
             # if the mutation event contains the break site, then edge distance is set to 0
@@ -66,18 +66,19 @@ def cal_edge_distance(aln, break_index):
     return cigar, start, edge_distance
 
 
-def choose_aln(alns, break_index):
+def choose_aln(alns, ref_seq, break_index):
     # choose the aln that is closest to the break site
     start = 0
     cigar = []
-    edge_distance = 2 * break_index
+    edge_distance = len(ref_seq)
 
     for i, aln in enumerate(alns):
-        tmp_cigar, tmp_start, tmp_edge_distance = cal_edge_distance(aln, break_index)
+        tmp_cigar, tmp_start, tmp_edge_distance = cal_edge_distance(aln, ref_seq, break_index)
         if tmp_edge_distance < edge_distance:
             candidate_aln = alns[i]
             start = tmp_start
             cigar = tmp_cigar
+            edge_distance  = tmp_edge_distance
         elif tmp_edge_distance == edge_distance:
             if tmp_start < start:
                 candidate_aln = alns[i]
@@ -130,7 +131,7 @@ def align(X, Y, break_index, idx, score_min=(20, 8), match=2, mismatch=-6, gap_o
         flag = "16"
         seq = str(Y.seq.reverse_complement())
 
-    aln, cigar = choose_aln(alns, break_index)
+    aln, cigar = choose_aln(alns, X.seq, break_index)
     #consumed_bases = re.finditer('([^DNHP]+)', ''.join(cigar))
     #pos = str(consumed_bases.next().start() + 1)  # 1-based index
     pos = "1"
