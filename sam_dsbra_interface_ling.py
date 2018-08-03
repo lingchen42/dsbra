@@ -5,7 +5,8 @@ Major changes
    mutations closest to the break site. Original aligner uses bowtie2
    and fails to get the closet alignment to the break site.
 2. Output the insertion sequence and the query sequence near the repair site.
-   The original does not.
+   The original script does not.
+3. Also includes the count of wildtypes.
 
 usage: sam_dsbra_interface_ling.py [-h] -o OUT_DIR [--run_name RUN_NAME]
                                    [-r REF_FA] [-q FASTQ] [-b BREAK_INDEX]
@@ -66,7 +67,7 @@ class RepairPattern:
         self.repair_sequence = ''
         self.repair_cigar_tuples = []
         # repair seq neighbourhood (+/- q_repair_margin on either side of the  mut range)in query seq
-        self.q_repair_seq = ''
+        self.actual_seq_near_break = ''
         self.mut_bottom_range = reference_end  # for the first comparison
         self.mut_top_range = -1  # for the first comparison
         self.ref_mut_start = 0
@@ -136,14 +137,15 @@ class RepairPattern:
         self.ref_mut_end = r_aln_locs[mut_end]
 
         # mut_start/end in reads
-        if not q_aln_locs[mut_start]:  # in case of deletion, it will be NaN
+        q_repair_start = q_aln_locs[mut_start]
+        if not q_aln_locs[mut_start]:  # in case of deletion it will be NaN
             q_repair_start = q_aln_locs[mut_start-1]
-        else:
-            q_repair_start = max(q_aln_locs[mut_start] - q_repair_margin, 0)
         q_repair_end = q_aln_locs[mut_end]
+        if not q_aln_locs[mut_end]:  # in case of deletion it will be NaN
+            q_repair_end = q_aln_locs[mut_end+1]
         q_repair_start_m = max(q_repair_start - q_repair_margin, 0)
         q_repair_end_m = min(q_repair_end + q_repair_margin, len(q_seq))
-        self.q_repair_seq = q_seq[q_repair_start_m : q_repair_end_m]
+        self.actual_seq_near_break = q_seq[q_repair_start_m : q_repair_end_m]
 
         # cigar_d = {1:"insertion", 2:"deletion", 7:"matched", 8:"mismatched"}  # cannot deal with other status
         cigar_tuples = read.cigartuples
@@ -392,6 +394,34 @@ def check_microhomology(ref_seq, del_start_loc, del_len, microhomology_cutoff=2)
     return is_mmej, microhomology
 
 
+def extend_for_compound(read, rp, last_margin, mut_range):
+    mut_start = min(mut_range)
+    mut_end = max(mut_range)
+    # for compound repair patterns
+    if rp.num_deletions + rp.num_insertions + rp.num_transitions \
+       + rp.num_transversions > 1:
+        cigar_list = []
+        for event_type, event_len in read.cigartuples:
+            cigar_list.extend([event_type]*event_len)
+
+        d = 1
+        while d <= last_margin:
+            if cigar_list[mut_start - d] != 7:  # not matched
+                mut_start -= d  # update the mut_start
+                d = 1  # reset distance to the last mutation events
+            else:
+                d += 1  # look 1 bp far away from the mut_start
+        d = 1
+        while d <= last_margin:
+            if cigar_list[mut_end + d] != 7:  # not matched
+                mut_end += d  # update the mut_end
+                d = 1  # reset distance to the last mutation events
+            else:
+                d += 1  # look 1 bp far away from the mut_end
+
+    return mut_start, mut_end
+
+
 def mutation_pattern(read, ref_seq, break_index, margin, mismatch_cutoff=1):
     '''
     create a repair pattern entry for the read
@@ -420,7 +450,7 @@ def mutation_pattern(read, ref_seq, break_index, margin, mismatch_cutoff=1):
     # if the mutation event overlaps with region of interest, record it.
     cigar_tuples = read.cigartuples
     loc = 0
-    mut_ranges = []  # based on global locs
+    mut_range = []  # based on global locs
     for event_type, event_len in cigar_tuples:
         q_loc = q_aln_locs[loc]  # map loc to location in query sequence
         r_loc = r_aln_locs[loc]  # map loc to location in reference sequence
@@ -435,33 +465,37 @@ def mutation_pattern(read, ref_seq, break_index, margin, mismatch_cutoff=1):
             elif event_type == 8:  # mismatch
                 # only consider mismatches that is really close to the breaksite
                 if abs(break_index - r_loc) <= mismatch_cutoff:
-                    mut_ranges.extend([loc, loc + event_len])
+                    mut_range.extend([loc, loc + event_len])
                     for l in range(loc, loc + event_len):
                         rp.add_mismatch(loc, read.query_sequence[q_aln_locs[l]],
                                         ref_seq[r_aln_locs[l]])
 
             elif event_type == 1:    # insertion
-                mut_ranges.extend([loc, loc + event_len])
+                mut_range.extend([loc, loc + event_len])
                 ins_str = read.query_sequence[q_loc : q_loc + event_len]
                 if loc > 0:  # if the insertion does not occur before ref starts
                     rp.add_insertion(r_aln_locs[loc - 1], ins_str)
 
             elif event_type == 2:  # deletion
-                mut_ranges.extend([loc, loc + event_len])
+                mut_range.extend([loc, loc + event_len])
                 del_str = ref_seq[r_loc : r_loc + event_len]
                 is_mmej, microhomology = check_microhomology(ref_seq, r_loc, event_len)
                 rp.add_deletion(r_loc, event_len, del_str, is_mmej, microhomology)
 
             else:
-                print("Cigar type %s is not implemented. Skip this read: %s"%(event_type, cigar_))
+                print("Cigar type %s is not implemented. Skip this read: %s"\
+                      %(event_type, cigar_tuples))
                 return "skipped"
 
         loc += event_len  # update current loc
 
-    mut_ranges = [i for i in mut_ranges if i]
-    if mut_ranges:
-        rp.mut_bottom_range = min(mut_ranges)
-        rp.mut_top_range = max(mut_ranges)
+    mut_range = [i for i in mut_range if i]
+
+    # if it's a compound mutation (not a single deletion or insertion),
+    # then use the last margin to extend the region to find repair pattern
+    # in a broader range. This is good for detecting telomere-like seq.
+    if mut_range:
+        rp.mut_bottom_range, rp.mut_top_range = extend_for_compound(read, rp, last_margin, mut_range)
     else:
     # if the mismatch > mismatch_cutoff, but there are no other mutation events within break +/- margin
     # then the mut_bottom_range or mut_top_range may have not been changed. However, it's likely
@@ -493,15 +527,17 @@ def get_summary_table(summary_table_fn, repair_pattern_table_fn, run_metadata,
     df = pd.read_table(repair_pattern_table_fn)
     df = df.drop("read_name", axis=1)
     df['count'] = 1
-    # In case q_repair_seq are different when repair_sequence is the same
-    cols_to_grp = [c for c in df.columns if c not in ['count', 'q_repair_seq']]
+    cols_order = df.columns
+    # In case actual_seq_near_break are different when repair_sequence is the same
+    cols_to_grp = [c for c in cols_order if c not in ['count', 'actual_seq_near_break']]
     df = df.groupby(cols_to_grp, as_index=False).agg({'count':'sum',
-                                                      'q_repair_seq':'first'})
+                                                      'actual_seq_near_break':'first'})
 
     # add entry for WT
     wt_entry = pd.Series()
     for f in list(df.columns[:-1]):
         wt_entry[f] = ""
+    wt_entry['repair_size'] = 0
     wt_entry['ref_mut_start'] = 0
     wt_entry['ref_mut_end'] = 0
     try:
@@ -512,10 +548,9 @@ def get_summary_table(summary_table_fn, repair_pattern_table_fn, run_metadata,
         wt_entry['count'] = wt_count
     df = df.append(wt_entry, ignore_index=True)
 
-
     df['mut_freq'] = df['count'] / (df['count'].sum())
     df = df.sort_values(by='count', ascending=False)
-    df.to_csv(summary_table_fn, sep='\t', index=False)
+    df.to_csv(summary_table_fn, columns=cols_order, sep='\t', index=False)
 
     return df
 
@@ -545,7 +580,8 @@ if __name__ == '__main__':
     arg_parser.add_argument("--last_margin", type=int, default=5,
                             help="the margin outside of the last mutation event"
                             "that should be included in the repair sequence"
-                            "pattern for those compound mutation events")
+                            "pattern for those compound mutation events"
+                            "; default 5bp")
     arg_parser.add_argument("--full_table", action="store_true",
                             help="Will generate a large table with"
                                  "repair pattern for each analyzed")
@@ -563,6 +599,7 @@ if __name__ == '__main__':
     run_name = args.run_name
     sam_filename = fastq_name[:fastq_name.rfind('.')]+'.sam'
     q_repair_margin = args.q_repair_margin
+    last_margin = args.last_margin
 
     output_dir = args.out_dir
     if os.path.exists(output_dir) :
@@ -584,7 +621,7 @@ if __name__ == '__main__':
     output_filename = os.path.join(output_dir, "%s_repair_pattern_summary.txt"%run_name)
     run_info = os.path.join(output_dir, '%s_run_info.txt'%run_name)
 
-    with open(run_info, 'w+') as fh:
+    with open(run_info, 'a+') as fh:
         fh.write('Time: %s\nWorking Directory:\n%s\nCommand:\n%s\n'\
                   %(str(datetime.now())[:-7],
                     os.getcwd(),
@@ -625,7 +662,7 @@ if __name__ == '__main__':
               'insertion_seqs', 'num_deletions', 'deletion_locs',
               'deletion_lens', 'deletions_seqs',
               'deletion_is_micro', 'micro_seq', 'repair_sequence',
-              'q_repair_seq', 'repair_cigar_tuples',
+              'actual_seq_near_break', 'repair_cigar_tuples',
               'ref_mut_start', 'ref_mut_end']
     rp_entries = {}
     for f in fields:
