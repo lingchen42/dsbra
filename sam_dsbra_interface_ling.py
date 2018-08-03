@@ -1,28 +1,36 @@
-################################################
-# 2018-07-31 Ling Chen
-#usage: sam_dsbra_interface_ling.py [-h] -o OUT_DIR [--run_name RUN_NAME]
-#                                   [-r REF_FA] [-q FASTQ] [-b BREAK_INDEX]
-#                                   [-m MARGIN] [--full_table]
-#
-#Double strand break repair analyzer (DSBRA)
-#optional arguments:
-#    -h, --help            show this help message and exit
-#    -o OUT_DIR, --out_dir OUT_DIR
-#                          output directory
-#    --run_name RUN_NAME   will be the prefix of output file names
-#    -r REF_FA, --ref_fa REF_FA
-#                          path of the reference sequence fasta file
-#    -q FASTQ, --fastq FASTQ
-#                          path of the reads to analyze in fastq format
-#    -b BREAK_INDEX, --break_index BREAK_INDEX
-#                          break index. 0-indexed, the position of nucleotide
-#                          right before the break site.
-#    -m MARGIN, --margin MARGIN
-#                          the margin before and after the break index that
-#                          should be considered for analysis
-#    --full_table          Will generate a large table with repair pattern for
-#                          each analyzed
-################################################
+'''
+2018-07-31 Ling Chen
+Major changes
+1. This script uses a customed aligner that chooses the alignment with
+   mutations closest to the break site. Original aligner uses bowtie2
+   and fails to get the closet alignment to the break site.
+2. Output the insertion sequence and the query sequence near the repair site.
+   The original does not.
+
+usage: sam_dsbra_interface_ling.py [-h] -o OUT_DIR [--run_name RUN_NAME]
+                                   [-r REF_FA] [-q FASTQ] [-b BREAK_INDEX]
+                                   [-m MARGIN] [--full_table]
+
+Double strand break repair analyzer (DSBRA)
+optional arguments:
+    -h, --help            show this help message and exit
+    -o OUT_DIR, --out_dir OUT_DIR
+                          output directory
+    --run_name RUN_NAME   will be the prefix of output file names
+    -r REF_FA, --ref_fa REF_FA
+                          path of the reference sequence fasta file
+    -q FASTQ, --fastq FASTQ
+                          path of the reads to analyze in fastq format
+    -b BREAK_INDEX, --break_index BREAK_INDEX
+                          break index. 0-indexed, the position of nucleotide
+                          right before the break site.
+    -m MARGIN, --margin MARGIN
+                          the margin before and after the break index that
+                          should be considered for analysis
+    --full_table          Will generate a large table with repair pattern for
+                          each read analyzed
+'''
+
 import sys
 import argparse
 from itertools import groupby
@@ -328,6 +336,29 @@ def mut_within_margin(sam_filename, mut_bamfile_name, non_mut_samfile_name,
     return run_metadata
 
 
+def check_microhomo_one_way(ref_seq, del_start_loc, del_len, m, mode='fw'):
+    is_mmej = False
+    microhomology = ''
+    matched = True
+    while matched:
+        if mode == 'fw':  # check fw microhomology
+            inside_del_span = (del_start_loc, del_start_loc + m)
+            outside_del_span = (del_start_loc + del_len, del_start_loc + del_len + m)
+        else:  # check reverse microhomology
+            inside_del_span = (del_start_loc + del_len - m, del_start_loc + del_len)
+            outside_del_span = (del_start_loc - m, del_start_loc)
+
+        if ref_seq[inside_del_span[0] : inside_del_span[1]] \
+           == ref_seq[outside_del_span[0] : outside_del_span[1]]:
+            m += 1
+            is_mmej = True
+            microhomology = ref_seq[inside_del_span[0] : inside_del_span[1]]
+        else:
+            matched = False
+    return is_mmej, microhomology
+
+
+
 def check_microhomology(ref_seq, del_start_loc, del_len, microhomology_cutoff=2):
     '''
     check is the deletion is microhomology
@@ -341,21 +372,11 @@ def check_microhomology(ref_seq, del_start_loc, del_len, microhomology_cutoff=2)
         microhomology: microhomology sequence
     '''
     m = microhomology_cutoff
-    is_mmej = False
-    microhomology = ''
-
-    matched = True
-    while matched:
-        before_del_span = (del_start_loc - m, del_start_loc)
-        after_del_span = (del_start_loc + del_len, del_start_loc + del_len + m)
-        if ref_seq[before_del_span[0] : before_del_span[1]] \
-           == ref_seq[after_del_span[0] : after_del_span[1]]:
-            m += 1
-            is_mmej = True
-            mircrohomogy = ref_seq[before_del_span[0] : before_del_span[1]]
-        else:
-            matched = False
-
+    is_mmej, microhomology = check_microhomo_one_way(ref_seq, del_start_loc,
+                                                     del_len, m, mode='fw')
+    if not is_mmej:   # if not forward microhomology, chech reverse.
+        is_mmej, microhomology = check_microhomo_one_way(ref_seq, del_start_loc,
+                                                         del_len, m, mode='rc')
     return is_mmej, microhomology
 
 
@@ -471,7 +492,10 @@ def get_rp(read, ref_seq, rp_entries, break_index, margin):
 def get_summary_table(summary_table_fn, repair_pattern_table_fn, run_metadata,
                       non_mut_samfile_name):
     print("Writing summary table to %s \n"%summary_table_fn)
-    df = pd.read_table(repair_pattern_table_fn)  # this solves the problem caused by a python list in a cell, otherwise it cannot be grouped appropriately
+
+    # Reading the table from file solves the problem caused by a python list in
+    # a cell. Otherwise it cannot be grouped appropriately
+    df = pd.read_table(repair_pattern_table_fn)
     df = df.drop("read_name", axis=1)
     df['count'] = 1
     df = df.groupby(list(df.columns[:-1]), as_index=False).agg({'count':'sum'})
@@ -611,8 +635,8 @@ if __name__ == '__main__':
         df.to_csv(repair_pattern_table_fn, sep="\t", index=False)
 
     # generate summary table of reads. Groups reads with the same repair pattern
-    df = get_summary_table(summary_table_fn, repair_pattern_table_fn, run_metadata,
-                      non_mut_samfile_name)
+    df = get_summary_table(summary_table_fn, repair_pattern_table_fn,
+                           run_metadata, non_mut_samfile_name)
     # the reads made to the end (repair pattern analyzed reads) can be different
     # from reads_with_mutations_within_range
     # because some reads can only mismatches within range, but not immediately close to break index and got filtered out
@@ -628,10 +652,6 @@ if __name__ == '__main__':
     print("Complete!")
 
 
-###############################################################################
-# original aligner uses bowtie2. Fail to get the closet alignment
-# to the break site.
-###############################################################################
 
 
 ###############################################################################
