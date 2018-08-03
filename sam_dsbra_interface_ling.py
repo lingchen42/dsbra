@@ -48,7 +48,6 @@ import time
 from datetime import datetime
 from collections import OrderedDict
 import pandas as pd
-from joblib import Parallel, delayed
 
 SAMTOOLS_FOLDER = ''
 #CIGAR_RE = re.compile('\d+[MIDNSHP]')
@@ -66,7 +65,8 @@ class RepairPattern:
 
         self.repair_sequence = ''
         self.repair_cigar_tuples = []
-
+        # repair seq neighbourhood (+/- q_repair_margin on either side of the  mut range)in query seq
+        self.q_repair_seq = ''
         self.mut_bottom_range = reference_end  # for the first comparison
         self.mut_top_range = -1  # for the first comparison
         self.ref_mut_start = 0
@@ -78,29 +78,29 @@ class RepairPattern:
         self.num_transitions = 0
         self.num_transversions = 0
 
-        self.num_insertion_events = 0
-        self.insertion_locations = [ ]
-        self.inserted_sequences = [ ]
+        self.num_insertions = 0
+        self.insertion_locs = [ ]
+        self.insertion_seqs = [ ]
 
         self.num_deletions = 0
-        self.deletion_locations = [ ]
-        self.deletion_lengths = [ ]
-        self.deleted_sequences = [ ]
-        self.deletion_is_microhomologous = [ ]
-        self.deletion_micro = [ ]
+        self.deletion_locs = [ ]
+        self.deletion_lens = [ ]
+        self.deletions_seqs = [ ]
+        self.deletion_is_micro = [ ]
+        self.micro_seq = [ ]
 
     def add_insertion(self, ins_loc, ins_str):
-        self.num_insertion_events += 1
-        self.insertion_locations.append(ins_loc)
-        self.inserted_sequences.append(ins_str)
+        self.num_insertions += 1
+        self.insertion_locs.append(ins_loc)
+        self.insertion_seqs.append(ins_str)
 
     def add_deletion(self, del_loc, del_size, del_str, is_micro, micro_seq):
         self.num_deletions += 1
-        self.deletion_locations.append(del_loc)
-        self.deletion_lengths.append(del_size)
-        self.deleted_sequences.append(del_str)
-        self.deletion_is_microhomologous.append(is_micro)
-        self.deletion_micro.append(micro_seq)
+        self.deletion_locs.append(del_loc)
+        self.deletion_lens.append(del_size)
+        self.deletions_seqs.append(del_str)
+        self.deletion_is_micro.append(is_micro)
+        self.micro_seq.append(micro_seq)
 
     def add_mismatch(self, mismatch_loc, new_base, old_base):
         self.mismatch_locations.append(mismatch_loc)
@@ -128,10 +128,22 @@ class RepairPattern:
         r_aln_locs = list(r_aln_locs)
         mut_start = self.mut_bottom_range
         mut_end = self.mut_top_range
+
+        # mut_start/end in ref for repair seq
         self.ref_mut_start = r_aln_locs[mut_start]
         if not self.ref_mut_start:  # in case of insertion, it will be NaN
             self.ref_mut_start = r_aln_locs[mut_start-1]
         self.ref_mut_end = r_aln_locs[mut_end]
+
+        # mut_start/end in reads
+        if not q_aln_locs[mut_start]:  # in case of deletion, it will be NaN
+            q_repair_start = q_aln_locs[mut_start-1]
+        else:
+            q_repair_start = max(q_aln_locs[mut_start] - q_repair_margin, 0)
+        q_repair_end = q_aln_locs[mut_end]
+        q_repair_start_m = max(q_repair_start - q_repair_margin, 0)
+        q_repair_end_m = min(q_repair_end + q_repair_margin, len(q_seq))
+        self.q_repair_seq = q_seq[q_repair_start_m : q_repair_end_m]
 
         # cigar_d = {1:"insertion", 2:"deletion", 7:"matched", 8:"mismatched"}  # cannot deal with other status
         cigar_tuples = read.cigartuples
@@ -265,7 +277,7 @@ def mut_within_margin(sam_filename, mut_bamfile_name, non_mut_samfile_name,
 
     if os.path.exists(mut_bamfile_name):
         print "ERROR: File \"%s\" exists."%mut_bamfile_name
-        sys.exit()
+        sys.exit(1)
 
     mut_bamfile = pysam.AlignmentFile(mut_bamfile_name,"wh", template=bamfile,
                                       reference_names=bamfile.references,
@@ -460,31 +472,14 @@ def mutation_pattern(read, ref_seq, break_index, margin, mismatch_cutoff=1):
 
 
 def get_rp(read, ref_seq, rp_entries, break_index, margin):
-
         rp = mutation_pattern(read, ref_seq, break_index, margin)
         if rp != 'skipped':
             rp.get_repair_sequence(read, ref_seq)
-
-            rp_entries['read_name'].append(rp.read_name)
-            rp_entries['repair_size'].append(rp.repair_size)
-            rp_entries['mismatch_locations'].append(rp.mismatch_locations)
-            rp_entries['new_mismatch_bases'].append(rp.new_mismatch_bases)
-            rp_entries['num_mismatch'].append((rp.num_transitions + rp.num_transversions))
-            rp_entries['num_transitions'].append(rp.num_transitions)
-            rp_entries['num_transversions'].append(rp.num_transversions)
-            rp_entries['num_insertions'].append(rp.num_insertion_events)
-            rp_entries['insertion_locs'].append(rp.insertion_locations)
-            rp_entries['insertion_seqs'].append(rp.inserted_sequences)
-            rp_entries['num_deletions'].append(rp.num_deletions)
-            rp_entries['deletion_locs'].append(rp.deletion_locations)
-            rp_entries['deletion_lens'].append(rp.deletion_lengths)
-            rp_entries['deletion_sequences'].append(rp.deleted_sequences)
-            rp_entries['deletion_is_micro'].append(rp.deletion_is_microhomologous)
-            rp_entries['repair_sequence'].append(rp.repair_sequence)
-            rp_entries['micro_seq'].append(rp.deletion_micro)
-            rp_entries['repair_cigar_tuples'].append(rp.repair_cigar_tuples)
-            rp_entries['ref_mut_start'].append(rp.ref_mut_start)
-            rp_entries['ref_mut_end'].append(rp.ref_mut_end)
+            for key in rp_entries.keys():
+                if key != "num_mismatch":
+                    rp_entries[key].append(getattr(rp, key))
+            rp_entries['num_mismatch'].append((rp.num_transitions\
+                                               + rp.num_transversions))
 
         return rp_entries
 
@@ -498,7 +493,10 @@ def get_summary_table(summary_table_fn, repair_pattern_table_fn, run_metadata,
     df = pd.read_table(repair_pattern_table_fn)
     df = df.drop("read_name", axis=1)
     df['count'] = 1
-    df = df.groupby(list(df.columns[:-1]), as_index=False).agg({'count':'sum'})
+    # In case q_repair_seq are different when repair_sequence is the same
+    cols_to_grp = [c for c in df.columns if c not in ['count', 'q_repair_seq']]
+    df = df.groupby(cols_to_grp, as_index=False).agg({'count':'sum',
+                                                      'q_repair_seq':'first'})
 
     # add entry for WT
     wt_entry = pd.Series()
@@ -534,11 +532,23 @@ if __name__ == '__main__':
     arg_parser.add_argument("-q", "--fastq",
                             help="path of the reads to analyze in fastq format")
     arg_parser.add_argument("-b", "--break_index", type=int,
-                            help="break index. 0-indexed, the position of nucleotide right before the break site.")
-    arg_parser.add_argument("-m", "--margin", type=int,
-                            help="the margin before and after the break index that should be considered for analysis")
+                            help="break index. 0-indexed, the position of"
+                                 "nucleotide right before the break site.")
+    arg_parser.add_argument("-m", "--margin", type=int, default=5,
+                            help="the margin before and after the break index"
+                                 "that should be considered for analysis;"
+                                 "default 5bp.")
+    arg_parser.add_argument("-qm", "--q_repair_margin", type=int, default=5,
+                            help="the margin before and after the last mutation"
+                                 "that should be reported"
+                                 "in the repaired_read_sequence; default 5bp.")
+    arg_parser.add_argument("--last_margin", type=int, default=5,
+                            help="the margin outside of the last mutation event"
+                            "that should be included in the repair sequence"
+                            "pattern for those compound mutation events")
     arg_parser.add_argument("--full_table", action="store_true",
-                            help="Will generate a large table with repair pattern for each analyzed")
+                            help="Will generate a large table with"
+                                 "repair pattern for each analyzed")
 #    arg_parser.add_argument( "--intermediate_files", action="store_true",
 #                            help="Whether to keep the intermediate files generated by the script")
 
@@ -552,6 +562,7 @@ if __name__ == '__main__':
     ref_fa = args.ref_fa
     run_name = args.run_name
     sam_filename = fastq_name[:fastq_name.rfind('.')]+'.sam'
+    q_repair_margin = args.q_repair_margin
 
     output_dir = args.out_dir
     if os.path.exists(output_dir) :
@@ -612,22 +623,16 @@ if __name__ == '__main__':
               'new_mismatch_bases', 'num_mismatch', 'num_transitions',
               'num_transversions', 'num_insertions', 'insertion_locs',
               'insertion_seqs', 'num_deletions', 'deletion_locs',
-              'deletion_lens', 'deletion_sequences',
+              'deletion_lens', 'deletions_seqs',
               'deletion_is_micro', 'micro_seq', 'repair_sequence',
-              'repair_cigar_tuples', 'ref_mut_start', 'ref_mut_end']
+              'q_repair_seq', 'repair_cigar_tuples',
+              'ref_mut_start', 'ref_mut_end']
     rp_entries = {}
     for f in fields:
         rp_entries[f] = []
 
-    # get_rp is useful is to parallize the code
     for read in bamfile.fetch(bamfile.references[0]):
         rp_entries = get_rp(read, ref_seq, rp_entries, break_index, margin)
-
-    # parallized version
-#    rp_entries = Parallel(n_jobs=-1)(delayed(get_rp)(read, ref_seq, rp_entries,
-#                                                     break_index, margin)\
-#                                     for read in bamfile.fetch(bamfile.references[0]))
-
 
     df = pd.DataFrame(rp_entries, columns=fields)
     if args.full_table:
@@ -650,22 +655,3 @@ if __name__ == '__main__':
                 fh.write("%s:\n%s\n"%(key, item))
 
     print("Complete!")
-
-
-
-
-###############################################################################
-# original scripts for analyzing the repair pattern of each read
-# I guess the logic is:
-# for each aligned pairs, if it's a insertion or deletion, use indel to track
-# until it finds a matched pair.
-# Then it will check under the condition of indel < 0 (deletion),
-# whether it's a microhomology or not. (microhomology means nucleotides on
-# either end of deletion be the same. mmej)
-# It will then check under the condition of indel > 0 (insertion), what the
-# insertion str is, and store it. ins_str get reset.
-# Finally it will check if the matced pair is a mismatch or not.
-# This has potential problem.
-# When there is a deletion followed by insertion before a matched pair occur,
-# indel might be cancelled out.
-###############################################################################
