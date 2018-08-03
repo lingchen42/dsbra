@@ -67,8 +67,8 @@ def parse_files(summary_fns):
 
 def get_mutation_event_freq(df, summary_fn):
     def assign_mutation_type(x):
-        if int(bool(x['num_deletions'])) + int(bool(x['num_insertions'])) + int(bool(x['num_mismatch'])) > 1:
-            # a mix of deletions, insertions and mismatch
+        if x['num_deletions'] + x['num_insertions'] + x['num_mismatch'] > 1
+            # if more than 1 mutation event
             return 'Compound'
         elif x['num_deletions']:
             return 'Deletion'
@@ -190,9 +190,6 @@ def aligned_mut(df):
     dft['count'] = counts
 
     return dft
-
-#aligned_mut_outfn = os.path.join(output_dir, 'aligned_mutation_events.csv')
-#dft.to_csv(seq_with_ins_outfn)
 
 
 if __name__ == '__main__':
