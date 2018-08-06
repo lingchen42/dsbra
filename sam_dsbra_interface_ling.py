@@ -559,8 +559,6 @@ if __name__ == '__main__':
 
     arg_parser.add_argument("-o", "--out_dir", required=True,
                             help="output directory")
-    arg_parser.add_argument("--run_name", default="test_run",
-                            help="will be the prefix of output file names")
     arg_parser.add_argument("-r", "--ref_fa",
                             help="path of the reference sequence fasta file")
     arg_parser.add_argument("-q", "--fastq",
@@ -600,8 +598,9 @@ if __name__ == '__main__':
     margin = args.margin
     fastq_name = args.fastq
     ref_fa = args.ref_fa
-    run_name = args.run_name
-    sam_filename = fastq_name[:fastq_name.rfind('.')]+'.sam'
+    run_name = fastq_name.split("/")[-1].split(".")[0] \
+               + '_b%s_m%s'%(break_index, margin)
+    sam_filename = fastq_name[:fastq_name.rfind('.')] + '.sam'
     q_repair_margin = args.q_repair_margin
     last_margin = args.last_margin
 
