@@ -7,15 +7,17 @@ Usage:
 Ling Chen 2018-05-29
 '''
 from __future__ import division
+import os
+import re
 import csv
 import ast
 import argparse
-from datetime import datetime
-import pandas as pd
-import os
 import subprocess
 import itertools
-import re
+from datetime import datetime
+
+import pandas as pd
+from scipy.stats import poisson
 
 
 def parse_files(summary_fns):
@@ -28,20 +30,16 @@ def parse_files(summary_fns):
     '''
     #samples: This dictionary stores the data in the output txt file
     samples = {}
-    #sample_count_list: This dictionary stores the number analyzed sequences
-    #                   in each file.
-    sample_count_list = {}
 
     for summary_fn in summary_fns:
         with open(summary_fn,'r') as sf:
-            sample_count_list[summary_fn] = 0
 
             data = list(csv.DictReader(sf, delimiter='\t'))
             #formatting of all fields appropriately
             for x in data:
                 try:
                     x['insertion_seqs'] = ast.literal_eval(x['insertion_seqs'])
-                    x['deletion_sequences'] = ast.literal_eval(x['deletion_sequences'])
+                    x['deletions_seqs'] = ast.literal_eval(x['deletions_seqs'])
                     x['deletion_lens'] = ast.literal_eval(x['deletion_lens'])
                     x['num_mismatch'] = int(x['num_transitions'])
                     x['num_transitions'] = int(x['num_transitions'])
@@ -55,19 +53,33 @@ def parse_files(summary_fns):
                 except:  # wild type entry
                     pass
 
+                x['repair_size'] = ast.literal_eval(x['repair_size'])
                 x['count'] = int(x['count'])
-                x['ref_mut_start'] = int(x['ref_mut_start'])
-                x['ref_mut_end'] = int(x['ref_mut_end'])
-                sample_count_list[summary_fn] += x['count']
+                x['ref_mut_start'] = int(ast.literal_eval(x['ref_mut_start']))
+                x['ref_mut_end'] = int(ast.literal_eval(x['ref_mut_end']))
 
             samples[summary_fn] = data
 
-        return samples, sample_count_list
+        return samples
+
+
+def apply_count_cutoff(df, p=0.001, num_colony=300):
+    '''
+    based on poisson distribution, apply count cutoff to the data
+    '''
+    total_reads = df['count'].sum()  # total reads from table, not including the failed alignments.
+    expected_reads = total_reads / num_colony
+    count_cutoff = poisson.ppf(p, expected_reads)
+    print("Using %s as count cutoff\n"%round(count_cutoff, 2))
+    df = df[df['count'] >= count_cutoff]
+    return df
 
 
 def get_mutation_event_freq(df, summary_fn):
     def assign_mutation_type(x):
-        if x['num_deletions'] + x['num_insertions'] + x['num_mismatch'] > 1
+        if not x['repair_sequence']:
+            return "WT"
+        elif x['num_deletions'] + x['num_insertions'] + x['num_mismatch'] > 1:
             # if more than 1 mutation event
             return 'Compound'
         elif x['num_deletions']:
@@ -85,9 +97,8 @@ def get_mutation_event_freq(df, summary_fn):
     count_d['Deletion'] = df[df['mutation_type'] == 'Deletion']['count'].sum()
     count_d['Insertion'] = df[df['mutation_type'] == 'Insertion']['count'].sum()
     count_d['Mismatch'] = df[df['mutation_type'] == 'Mismatch']['count'].sum()
+    count_d['WT'] = df[df['mutation_type'] == 'WT']['count'].sum()
     dft = pd.DataFrame(count_d.items(), columns=['mutation_type', 'count'])
-    num_wt = sample_count_list[summary_fn] - dft['count'].sum()
-    dft.loc[len(dft)] = ['WT', num_wt]
     dft['percentage'] = dft['count'] / dft['count'].sum()
 
     return dft
@@ -111,7 +122,7 @@ def seq_counts(df, mode='deletion'):
         count = row['count']
 
         if mode == 'deletion':
-            seqs = row['deletion_sequences']
+            seqs = row['deletions_seqs']
             #seqs = re.findall('\^\(.*?\)', row['repair_sequence'])
             for seq in seqs:
                 count = seq_del_counts.get(seq, 0) + row['count']
@@ -148,7 +159,10 @@ def insertion_len_dist(df):
 
 
 def aligned_mut(df):
-    indices = []
+    df = df.sort_values("repair_size", ascending=False)
+
+    indices_start = []
+    indices_end = []
     mut_starts = []
     mut_ends = []
     types = []
@@ -156,14 +170,19 @@ def aligned_mut(df):
     counts = []
 
     cigar_d = {1:'insertion', 2:'deletion', 7:'matched', 8:'mismatch'}
+    cum_count = 0
     for index, row in df.iterrows():
+        idx_start = cum_count
+        idx_end = cum_count + row['count']
+        cum_count += row['count']
         mut_start = row['ref_mut_start']
         mut_end = row['ref_mut_end']
         try:
             repair_cigar_tuples = row['repair_cigar_tuples']
             loc = mut_start
             for event_type, event_len in repair_cigar_tuples:
-                indices.append(index)
+                indices_start.append(idx_start)
+                indices_end.append(idx_end)
                 types.append(cigar_d[event_type])
                 mut_starts.append(loc)
                 counts.append(row['count'])
@@ -174,7 +193,8 @@ def aligned_mut(df):
                     mut_ends.append(loc+event_len)
                     loc += event_len
         except:
-            indices.append(index)
+            indices_start.append(idx_start)
+            indices_end.append(idx_end)
             mut_starts.append(0)
             mut_ends.append(0)
             types.append("matched")
@@ -182,7 +202,8 @@ def aligned_mut(df):
             counts.append(row['count'])
 
     dft = pd.DataFrame()
-    dft['idx'] = indices
+    dft['idx_start'] = indices_start
+    dft['idx_end'] = indices_end
     dft['mut_start'] = mut_starts
     dft['mut_end'] = mut_ends
     dft['type'] = types
@@ -225,6 +246,11 @@ if __name__ == '__main__':
                             help="the start reference base to show aligned mutation events")
     arg_parser.add_argument("--break_index", type=int, default=None,
                             help="the index of break site")
+    arg_parser.add_argument("--count_cutoff", nargs=2, type=float, default=None,
+                            help="take probability cutoff, number of colonies,"
+                                 "apply count cutoff to the summary table"
+                                 "based on the poisson distribution;"
+                                 "default 0.001, 300")
 
     args = arg_parser.parse_args()
 
@@ -241,13 +267,21 @@ if __name__ == '__main__':
     output_dir = args.out_dir
     if not os.path.exists(output_dir): os.makedirs(output_dir)
 
+
     print("Writing output to %s ..."%output_dir)
 
-    samples, sample_count_list = parse_files(summary_fns)
+    #samples, sample_count_list = parse_files(summary_fns)
+    samples = parse_files(summary_fns)
     for summary_fn in summary_fns:
         summary_name = os.path.basename(summary_fn).replace('.txt', '')
         cols = [col for col in samples[summary_fn][0].keys() if col]
         df = pd.DataFrame.from_records(samples[summary_fn], columns=cols)
+#        df = pd.read_table(summary_fn)
+
+        # apply count cutoff
+        if args.count_cutoff:
+            p, num_colony = args.count_cutoff
+            df = apply_count_cutoff(df, p, num_colony)
 
         # plot mutaion type frequency distribution
         if args.mut_type or args.all:
@@ -322,4 +356,5 @@ if __name__ == '__main__':
             else:
                 print("Error generating alignment plot. Please provide break index using --break_index.")
 
+        subprocess.call("rm %s/*csv"%output_dir, shell=True)
         print("\nComplete!")
