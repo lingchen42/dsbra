@@ -177,8 +177,8 @@ def aligned_mut(df):
         cum_count += row['count']
         mut_start = row['ref_mut_start']
         mut_end = row['ref_mut_end']
-        try:
-            repair_cigar_tuples = row['repair_cigar_tuples']
+        repair_cigar_tuples = row['repair_cigar_tuples']
+        if repair_cigar_tuples:
             loc = mut_start
             for event_type, event_len in repair_cigar_tuples:
                 indices_start.append(idx_start)
@@ -192,7 +192,7 @@ def aligned_mut(df):
                 else:
                     mut_ends.append(loc+event_len)
                     loc += event_len
-        except:
+        else:
             indices_start.append(idx_start)
             indices_end.append(idx_end)
             mut_starts.append(0)
