@@ -43,7 +43,7 @@ df <- read.csv(opt$input)
 basename <- tools::file_path_sans_ext(opt$input)
 
 # output name
-outname <- sprintf('%s.pdf', basename)
+outname <- sprintf('%s.png', basename)
 print(sprintf('Writing to %s', outname))
 
 min_count <- opt$min_count
@@ -144,7 +144,7 @@ if (opt$aligned_mutations){
     aspect_scale <- 0.005
 
     # prepare table
-    df <- df[, 2:7]
+    df <- df[, 2:8]
     # because if mut_start = 85, then it will cover [85,86].
     # If break site is 84, then it is marked at [83, 84] | [84,85].
     # so we want to mark the mutation happened at 85, as [84, 85]
@@ -159,7 +159,8 @@ if (opt$aligned_mutations){
         x_start <- x_start - 1
     }
 
-    df2 <- data.frame(idx = df$idx,
+    df2 <- data.frame(idx_start = df$idx_start,
+                      idx_end = df$idx_end,
                       mut_start = rep(ref_seq_range[1], nrow(df)) - break_index,
                       mut_end = rep(ref_seq_range[2], nrow(df)) - break_index,
                       type = rep('matched', nrow(df)),
@@ -167,43 +168,30 @@ if (opt$aligned_mutations){
                       count = df$count)
 
     dft <- rbind(df2, df)
-    dft <- subset(dft, count > min_count)
-    dft$idx <- max(dft$idx) - dft$idx  # top to bottom. common to rare
-    p1 <- ggplot(dft, aes(xmin = mut_start, xmax = mut_end, ymin = idx + 0.1, ymax = idx + 0.9)) +
+    p1 <- ggplot(dft, aes(xmin = mut_start, xmax = mut_end,
+                          ymin = idx_start, ymax = idx_end)) +
                  geom_rect(aes(fill = type)) +
                  geom_vline(xintercept = 0, color="red", linetype=3) +
-                 geom_text(aes(x = mut_start+mut_size_hjust, y = idx+0.5, label=region_len), size=mut_size_font) +
+                 #geom_text(aes(x = mut_start+mut_size_hjust,
+                 #              y = (idx_end - idx_start)/2 + idx_start,
+                 #          label=region_len),
+                 #          size=mut_size_font) +
                  labs(x="bp from cut site", y="") +
+                 guides(fill=guide_legend(title="Mutation Type")) +
                  scale_x_continuous(breaks=seq(x_start, x_end, x_interval)) +
-                 scale_y_continuous(breaks=seq(0, max(dft$idx)+2, 1)) +
-                 annotate("text", label = "cut site", x = 0 , y =  max(dft$idx) + 2 , color = "black") +
-                 scale_fill_manual(values = c("matched"="grey", "deletion"="black", "insertion"="blue", "mismatch"="red")) +
-                 theme(aspect.ratio =  aspect_scale * nrow(dft),
-                 legend.position="bottom",
-                 panel.background = element_blank(),
-                 axis.text.x= element_text(size=8),
-                 axis.line.x =element_line(color="black"),
-                 axis.text.y= element_blank(),
-                 axis.ticks.y=element_blank())
-
-    dft2 <- subset(dft, mut_start!=-break_index)  #get the mutation events
-    dft2 <- unique(dft2[, c('idx', 'count')])
-    p2 <- ggplot(dft2, aes(x=idx, y=count, label=count)) +
-                 geom_bar(stat="identity") +
-                 geom_text(hjust=-0.2, size=1) +
-                 ylim(0, 1.15*max(dft2$count)) +
-                 theme(aspect.ratio = 5,
+                 scale_y_continuous(breaks=seq(0, 1.02*max(dft$idx_end), 1)) +  # cut size text margin 1.02 * max(y)
+                 annotate("text", label = "cut site", x = 0 ,
+                          y =  1.02*max(dft$idx_end), color = "black") +
+                 scale_fill_manual(values = c("matched"="grey",
+                                              "deletion"="black",
+                                              "insertion"="blue",
+                                              "mismatch"="red")) +
+                 theme(legend.position="bottom",
+                       aspect.ratio =  aspect_scale * nrow(dft),
                        panel.background = element_blank(),
-                       axis.title.y = element_blank(),
-                       axis.text.x= element_text(size=6),
+                       axis.text.x= element_text(size=8),
                        axis.line.x =element_line(color="black"),
                        axis.text.y= element_blank(),
-                       axis.ticks.y=element_blank(),
-                       plot.margin=grid::unit(c(0,0,0,0), "mm")) +
-                 coord_flip()
-
-    outname2 <- sprintf('%s_freq.pdf', basename)
+                       axis.ticks.y=element_blank())
     ggsave(filename=outname, plot=p1)
-    print(sprintf('Writing to %s', outname2))
-    ggsave(filename=outname2, plot=p2)
 }
