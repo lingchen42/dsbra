@@ -47,19 +47,26 @@ def cal_edge_distance(aln, ref_seq, break_index):
                 break_index += (insertion.end() - insertion.start())
 
     cigar = aln2cigar(aln)
-    muts = re.finditer('([^=]+)', ''.join(cigar))
-    edge_distance = len(ref_seq)
-    for m in muts:
+    muts = list(re.finditer('([^=]+)', ''.join(cigar)))
+
+    for i, m in enumerate(muts):
+        if i == 0:  # initate the values
+            start = m.start()
+            edge_distance = abs(break_index - m.start() + break_index - m.end())
+
         if (m.start() < break_index) and (m.end() > break_index):
-            # if the mutation event contains the break site, then edge distance is set to 0
+            # if the mutation event contains the break site,
+            # then edge distance is set to 0
             tmp_d =0
         else:
             # if the mutation event does not contain the break site,
-            # the edge distance is the absolute of the sum of the signed distance of start to break site
+            # the edge distance is the absolute of the sum of
+            # the signed distance of start to break site
             # and the signed distance of end to break site
             tmp_d = abs(break_index - m.start() + break_index - m.end())
 
-        if tmp_d < edge_distance:
+        # i=0 still goes through this for a correct value of edge_distance
+        if tmp_d <= edge_distance:
             edge_distance = tmp_d
             start = m.start()
 
@@ -67,23 +74,32 @@ def cal_edge_distance(aln, ref_seq, break_index):
 
 
 def choose_aln(alns, ref_seq, break_index):
-    # choose the aln that is closest to the break site
-    start = 0
-    cigar = []
-    edge_distance = len(ref_seq)
+    '''
+    choose the aln that is closest to the break site
+    '''
 
     for i, aln in enumerate(alns):
-        tmp_cigar, tmp_start, tmp_edge_distance = cal_edge_distance(aln, ref_seq, break_index)
-        if tmp_edge_distance < edge_distance:
-            candidate_aln = alns[i]
-            start = tmp_start
+        tmp_cigar, tmp_start, tmp_edge_distance =\
+               cal_edge_distance(aln, ref_seq, break_index)
+
+        # initiate the values
+        if i == 0:
             cigar = tmp_cigar
-            edge_distance  = tmp_edge_distance
-        elif tmp_edge_distance == edge_distance:
-            if tmp_start < start:
+            start = tmp_start
+            candidate_aln = aln
+            edge_distance = tmp_edge_distance
+
+        else:
+            if tmp_edge_distance < edge_distance:
                 candidate_aln = alns[i]
                 start = tmp_start
                 cigar = tmp_cigar
+                edge_distance  = tmp_edge_distance
+            elif tmp_edge_distance == edge_distance:
+                if tmp_start < start:
+                    candidate_aln = alns[i]
+                    start = tmp_start
+                    cigar = tmp_cigar
 
     return candidate_aln, cigar
 
