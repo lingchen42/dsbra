@@ -359,7 +359,7 @@ def check_microhomo_one_way(ref_seq, del_start_loc, del_len, m, mode='fw'):
 
 
 
-def check_microhomology(ref_seq, del_start_loc, del_len, microhomology_cutoff=2):
+def check_microhomology(ref_seq, del_start_loc, del_len, microhomology_cutoff=1):
     '''
     check is the deletion is microhomology
     Args:
