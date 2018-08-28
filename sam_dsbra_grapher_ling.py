@@ -188,7 +188,7 @@ def aligned_mut(df):
                 counts.append(row['count'])
                 region_lens.append(event_len)
                 if event_type == 1:  # insertion does not consume ref bases
-                    mut_ends.append(loc+0.5)  # just to make it visible
+                    mut_ends.append(loc+0.9)  # just to make it visible
                 else:
                     mut_ends.append(loc+event_len)
                     loc += event_len
