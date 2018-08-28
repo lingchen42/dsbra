@@ -14,7 +14,7 @@ option_list <- list(
     make_option("--del_seq", action='store_true', default=FALSE,
                 help="plot sequences_with_deletion_events.csv\
                 plot Sequences with Deletion Event"),
-    make_option("--min_count", default=100,
+    make_option("--min_count", default=0,
                 help="determine how the minimum counts to include in\
                       Sequences with Deletion/Insertion/Mutation Event"),
     make_option("--ins_len", action='store_true', default=FALSE,
@@ -90,7 +90,7 @@ if (opt$del_seq){
     geom_text(aes(label=count), position=position_dodge(width=0.9), hjust=-0.3, size=4*20/nrow(df)) +
     theme_bw() +
     theme(aspect.ratio = 1 * nrow(df) / 20,
-          axis.text=element_text(size=16*20/nrow(df))) +
+          axis.text=element_text(size=14*20/nrow(df))) +
     coord_flip(ylim = c(0, max(df$count) * 1.2))
     ggsave(filename=outname, plot=p)
 }
@@ -130,7 +130,7 @@ if (opt$repair_seq){
     geom_text(aes(label=count), position=position_dodge(width=0.9), hjust=-0.3, size=4*20/nrow(df)) +
     theme_bw() +
     theme(aspect.ratio = 1 * nrow(df) / 20,
-          axis.text=element_text(size=16*20/nrow(df))) +
+          axis.text=element_text(size=14*20/nrow(df))) +
     coord_flip(ylim = c(0, max(df$count) * 1.2))
     tryCatch(ggsave(filename=outname, plot=p), error= function(err){print('repair patterns fails')})
 }
@@ -141,7 +141,8 @@ if (opt$aligned_mutations){
     break_index <- opt$break_index
     mut_size_font <- 1.5
     mut_size_hjust <- -3
-    aspect_scale <- 0.005
+    aspect_ratio <- 1
+    width_scale <- nrow(df) * 1/2000
 
     # prepare table
     df <- df[, 2:8]
@@ -152,7 +153,7 @@ if (opt$aligned_mutations){
     df$mut_end <- df$mut_end - break_index - 1
 
     x_start <- ref_seq_range[1] - break_index
-    x_end <- ref_seq_range[1] + break_index
+    x_end <- ref_seq_range[2] - break_index
     x_interval <- 5
     # make sure 0bp is shown on the plot
     while ((0 - x_start) %% 5){
@@ -169,9 +170,10 @@ if (opt$aligned_mutations){
 
     dft <- rbind(df2, df)
     p1 <- ggplot(dft, aes(xmin = mut_start, xmax = mut_end,
-                          ymin = idx_start, ymax = idx_end)) +
+                          ymin = idx_start*width_scale,
+                          ymax = idx_end*width_scale)) +
                  geom_rect(aes(fill = type)) +
-                 geom_vline(xintercept = 0, color="red", linetype=3) +
+                 geom_vline(xintercept = 0, color="#FF2E4C", linetype=3) +
                  #geom_text(aes(x = mut_start+mut_size_hjust,
                  #              y = (idx_end - idx_start)/2 + idx_start,
                  #          label=region_len),
@@ -180,14 +182,14 @@ if (opt$aligned_mutations){
                  guides(fill=guide_legend(title="Mutation Type")) +
                  scale_x_continuous(breaks=seq(x_start, x_end, x_interval)) +
                  scale_y_continuous(breaks=seq(0, 1.02*max(dft$idx_end), 1)) +  # cut size text margin 1.02 * max(y)
-                 annotate("text", label = "cut site", x = 0 ,
-                          y =  1.02*max(dft$idx_end), color = "black") +
+#                 annotate("text", label = "cut site", x = 0 ,
+#                          y =  1.03*max(dft$idx_end), color = "#FF2E4C") +
                  scale_fill_manual(values = c("matched"="grey",
                                               "deletion"="black",
-                                              "insertion"="blue",
-                                              "mismatch"="red")) +
+                                              "insertion"="#2E99B0",
+                                              "mismatch"="#FCD77F")) +
                  theme(legend.position="bottom",
-                       aspect.ratio =  aspect_scale * nrow(dft),
+                       aspect.ratio =  aspect_ratio,
                        panel.background = element_blank(),
                        axis.text.x= element_text(size=8),
                        axis.line.x =element_line(color="black"),
