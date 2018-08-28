@@ -42,7 +42,7 @@ def cal_edge_distance(aln, ref_seq, break_index):
     if '-' in ref_aln:
         insertions = re.finditer('(-+)', ref_aln)
         for insertion in insertions:
-            if insertion.start() < break_index:
+            if insertion.start() <= break_index:
                 # update break_index, edge_distance
                 break_index += (insertion.end() - insertion.start())
 
@@ -54,8 +54,10 @@ def cal_edge_distance(aln, ref_seq, break_index):
             start = m.start()
             edge_distance = abs(break_index - m.start() + break_index - m.end())
 
-        if (m.start() < break_index) and (m.end() > break_index):
-            # if the mutation event contains the break site,
+        #if (m.start() <= break_index) and (m.end() >= break_index):
+        if  (break_index in range(m.start(), m.end())) or \
+            ((break_index + 1) in range(m.start(), m.end())):
+            # if the mutation event contains the break site, (break, break+1)
             # then edge distance is set to 0
             tmp_d =0
         else:
@@ -63,7 +65,9 @@ def cal_edge_distance(aln, ref_seq, break_index):
             # the edge distance is the absolute of the sum of
             # the signed distance of start to break site
             # and the signed distance of end to break site
-            tmp_d = abs(break_index - m.start() + break_index - m.end())
+            tmp_d_1 = abs(break_index - m.start() + break_index - m.end())
+            tmp_d_2 = abs(break_index + 1 - m.start() + break_index + 1 - m.end())
+            tmp_d = min(tmp_d_1, tmp_d_2)
 
         # i=0 still goes through this for a correct value of edge_distance
         if tmp_d <= edge_distance:
