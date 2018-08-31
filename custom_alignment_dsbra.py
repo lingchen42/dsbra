@@ -8,6 +8,9 @@ import re
 import argparse
 from itertools import groupby
 from joblib import Parallel, delayed
+import matplotlib as mpl
+mpl.use("Agg")
+import matplotlib.pyplot as plt
 
 # break site is 0-indexed, the position of the nucleotide right before the break site
 # edge distance:
@@ -108,7 +111,17 @@ def choose_aln(alns, ref_seq, break_index):
     return candidate_aln, cigar
 
 
-def align(X, Y, break_index, idx, score_min=(20, 8), match=2, mismatch=-6, gap_open=-5, gap_extension=-2):
+def trim_aln(aln):
+    '''
+    For local alignment, ignore anything that extends beyond the ref seq.
+    '''
+    ref_end = [m.start(0) for m in re.finditer('-*$', aln[0])][0]
+    aln = (aln[0][:ref_end], aln[1][:ref_end], aln[2], aln[3], aln[4])
+    return aln
+
+
+def align(X, Y, break_index, idx, align_mode, score_min=(20, 8),
+          match=2, mismatch=-6, gap_open=-5, gap_extension=-2):
     '''
     align record X and record Y, generate a SAM format entry
     Args:
@@ -137,9 +150,18 @@ def align(X, Y, break_index, idx, score_min=(20, 8), match=2, mismatch=-6, gap_o
 
     score_min = score_min[0] + score_min[1] * math.log(len(X))
 
-    fw_alns = pairwise2.align.globalms(X.seq, Y.seq, match, mismatch, gap_open, gap_extension)
-    rc_alns = pairwise2.align.globalms(X.seq, Y.seq.reverse_complement(),
-                                  match, mismatch, gap_open, gap_extension)
+    if align_mode == "global":
+        fw_alns = pairwise2.align.globalms(X.seq, Y.seq, match,
+                                           mismatch, gap_open, gap_extension)
+        rc_alns = pairwise2.align.globalms(X.seq, Y.seq.reverse_complement(),
+                                      match, mismatch, gap_open, gap_extension)
+    else:
+        fw_alns = pairwise2.align.localms(X.seq, Y.seq, match,
+                                           mismatch, gap_open, gap_extension)
+        rc_alns = pairwise2.align.localms(X.seq, Y.seq.reverse_complement(),
+                                      match, mismatch, gap_open, gap_extension)
+        fw_alns = [trim_aln(aln) for aln in fw_alns]
+        rc_alns = [trim_aln(aln) for aln in rc_alns]
 
     # check if the sequence is aligned better with fw or rc
     if fw_alns[0][2] >= rc_alns[0][2]:
@@ -152,6 +174,12 @@ def align(X, Y, break_index, idx, score_min=(20, 8), match=2, mismatch=-6, gap_o
         seq = str(Y.seq.reverse_complement())
 
     aln, cigar = choose_aln(alns, X.seq, break_index)
+    if align_mode == "local":
+        # in local alignemnt the cigar and the query seq may be different length because of the truncation
+        seq = ''.join(re.findall('[AGCTN]+', aln[1]))
+        if Y.name == "A00252:48:H7532DSXX:2:1132:26250:3239":
+            print(cigar, len(cigar), seq, len(seq), aln)
+
     #consumed_bases = re.finditer('([^DNHP]+)', ''.join(cigar))
     #pos = str(consumed_bases.next().start() + 1)  # 1-based index
     pos = "1"
@@ -167,7 +195,7 @@ def align(X, Y, break_index, idx, score_min=(20, 8), match=2, mismatch=-6, gap_o
 
     sam_entry = "\t".join([qname, flag, rname, pos, mapq, cigar, rnext, pnext, tlen, seq, qual]) + '\n'
 
-    return sam_entry
+    return (sam_entry, score)
 
 
 def main():
@@ -175,6 +203,8 @@ def main():
     arg_parser = argparse.ArgumentParser(description="Customed aligment for dsbra")
     arg_parser.add_argument("-o", "--outfn", required=True,
                             help="output SAM filename")
+    arg_parser.add_argument("--align_mode", required=True, choices=["global",
+                            "local"], help="choose the method for alignment")
     arg_parser.add_argument("-f", "--fastq", required=True,
                             help="reads in fastq format for alignment")
     arg_parser.add_argument("--ref", required=True,
@@ -191,10 +221,16 @@ def main():
     # set output filename
     outfn = args.outfn
 
+    # alignment method
+    align_mode = args.align_mode
+
     # read in reference sequneces and reads
     ref = list(SeqIO.parse(args.ref, "fasta"))[0]
     records = SeqIO.parse(args.fastq, "fastq")
-    print("Reference sequence loaded. Begin alignment...")
+    print("Reference sequence and reads loaded. Begin alignment...")
+
+    # set up score_min for alignment
+    score_min = (20, 8)
 
     # perform the customed alignment and write to a SAM format output file
     with open(outfn, "w+") as outfh:
@@ -202,9 +238,20 @@ def main():
         outfh.write("@HD\tVN:1.0\tSO:unsorted\n")
         outfh.write("@SQ\tSN:%s\tLN:%s\n"%(ref.name, len(ref.seq)))
         outfh.write('''@PG\tID:custom_alignment_dsbra.py\tPN:custom_alignment_dsbra.py\tVN:NA\tCL:"%s"\n'''%(' '.join(sys.argv)))
-        sam_entries = Parallel(n_jobs=-1)(delayed(align)(ref, record, break_index, idx) for idx, record in enumerate(records))
+        sam_entries_n_score = Parallel(n_jobs=-1)(delayed(align)\
+                                                  (ref, record, break_index,
+                                                   idx, align_mode, score_min)\
+                                                   for idx, record in enumerate(records))
+        sam_entries, scores = map(list, zip(*sam_entries_n_score))
         print("Alignment complete. Writing to %s"%outfn)
         outfh.writelines(sam_entries)
+        # plot alignment score distribution
+        outplot = outfn + "_alignment_scores.png"
+        print("Plotting the alignment score distribution%s"%outplot)
+        plt.hist(scores, bins="auto")
+        plt.axvline(x = (score_min[0] + score_min[1] * math.log(len(ref.seq))),
+                    color="red")
+        plt.savefig(outplot)
 
 
 if __name__ == '__main__':
