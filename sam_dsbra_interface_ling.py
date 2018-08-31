@@ -242,7 +242,7 @@ def aln(sam_filename, ref_fa, fastq_name, break_index, run_metadata, output_dir,
 
 
 def mut_within_margin(sam_filename, mut_bamfile_name, non_mut_samfile_name,
-                      break_index, margin, run_metadata):
+                      ref_seq, break_index, margin, run_metadata):
     '''
     Reads with mutation within margin.
     Args:
@@ -665,8 +665,9 @@ def main():
     if os.path.exists(mut_bamfile_name):
         print("Already filtered for reads with mutations within range in %s"%mut_bamfile_name)
     else:
-        run_metadata = mut_within_margin(sam_filename, mut_bamfile_name, non_mut_samfile_name,
-                          break_index, margin, run_metadata)
+        run_metadata = mut_within_margin(sam_filename, mut_bamfile_name,
+                                         non_mut_samfile_name, ref_seq,
+                                         break_index, margin, run_metadata)
 
     # analyzing the repair pattern of each read, store in a table
     bamfile = pysam.AlignmentFile(mut_bamfile_name+".sorted.bam","rb")
