@@ -187,7 +187,7 @@ def get_ref(ref_fa):
 
 
 def aln(sam_filename, ref_fa, fastq_name, break_index, run_metadata, output_dir,
-        record_failed_alignment=True):
+        align_mode, record_failed_alignment=True):
     '''
     Customed aligner. Among alignments with highest scores, choose the one with
     mutation events cloest to the break site.
@@ -208,7 +208,9 @@ def aln(sam_filename, ref_fa, fastq_name, break_index, run_metadata, output_dir,
     with open(os.devnull, 'wb') as out:
         if not os.path.exists(sam_filename):  # if no corresponding SAM file, do the alignment
             print("\nStart alignment...")
-            run_metadata['alignment_settings'] = './custom_alignment_dsbra.py -o %s --ref %s -f %s -b %s'%(sam_filename, ref_fa, fastq_name, break_index)
+            run_metadata['alignment_settings'] =\
+              './custom_alignment_dsbra.py -o %s --ref %s -f %s -b %s --align_mode %s'\
+                    %(sam_filename, ref_fa, fastq_name, break_index, align_mode)
             print(run_metadata['alignment_settings'])
             subprocess.call(run_metadata['alignment_settings'], shell=True)
             print("Alignment completed. The alignment file is:\n%s\n"%sam_filename)
@@ -391,14 +393,14 @@ def extend_for_compound(read, rp, last_margin, mut_range):
             cigar_list.extend([event_type]*event_len)
 
         d = 1
-        while d <= last_margin:
+        while d <= last_margin and ((mut_start-d) >= 0):
             if cigar_list[mut_start - d] != 7:  # not matched
                 mut_start -= d  # update the mut_start
                 d = 1  # reset distance to the last mutation events
             else:
                 d += 1  # look 1 bp far away from the mut_start
         d = 1
-        while d <= last_margin:
+        while d <= last_margin and ((mut_end+d) < len(cigar_list)):
             if cigar_list[mut_end + d] != 7:  # not matched
                 mut_end += d  # update the mut_end
                 d = 1  # reset distance to the last mutation events
@@ -559,6 +561,8 @@ if __name__ == '__main__':
 
     arg_parser.add_argument("-o", "--out_dir", required=True,
                             help="output directory")
+    arg_parser.add_argument("--align_mode", required=True, choices=["global",
+                            "local"], help="choose the method for alignment")
     arg_parser.add_argument("-r", "--ref_fa",
                             help="path of the reference sequence fasta file")
     arg_parser.add_argument("-q", "--fastq",
@@ -594,16 +598,6 @@ if __name__ == '__main__':
     print("")
 
     # set global values
-    break_index = args.break_index
-    margin = args.margin
-    fastq_name = args.fastq
-    ref_fa = args.ref_fa
-    run_name = fastq_name.split("/")[-1].split(".")[0] \
-               + '_b%s_m%s'%(break_index, margin)
-    sam_filename = fastq_name[:fastq_name.rfind('.')] + '.sam'
-    q_repair_margin = args.q_repair_margin
-    last_margin = args.last_margin
-
     output_dir = args.out_dir
     if os.path.exists(output_dir) :
         #print("Error! The output directory %s already exists. Please use a"
@@ -612,7 +606,20 @@ if __name__ == '__main__':
         print("WARNING! Overwritting the existing output directory %s."%(output_dir))
     else:
         os.makedirs(output_dir)
+
     print("")
+    align_mode = args.align_mode
+    break_index = args.break_index
+    margin = args.margin
+    fastq_name = args.fastq
+    ref_fa = args.ref_fa
+    run_name = fastq_name.split("/")[-1].split(".")[0] \
+               + '_b%s_m%s'%(break_index, margin)
+    sam_filename = os.path.join(output_dir,
+                          os.path.basename(fastq_name[:fastq_name.rfind('.')])\
+                          + '_%s_aln.sam'%align_mode)
+    q_repair_margin = args.q_repair_margin
+    last_margin = args.last_margin
 
     mut_bamfile_name = os.path.join(output_dir, "%s_mut_reads.sam"%(run_name))
     non_mut_samfile_name = os.path.join(output_dir, "%s_non_mut_reads.sam"%(run_name))
@@ -625,6 +632,7 @@ if __name__ == '__main__':
     run_info = os.path.join(output_dir, '%s_run_info.txt'%run_name)
 
     with open(run_info, 'a+') as fh:
+        fh.write("\n")
         fh.write('Time: %s\nWorking Directory:\n%s\nCommand:\n%s\n'\
                   %(str(datetime.now())[:-7],
                     os.getcwd(),
@@ -646,7 +654,7 @@ if __name__ == '__main__':
 
     # customed aligner
     run_metadata = aln(sam_filename, ref_fa, fastq_name, break_index, run_metadata,
-                       output_dir, record_failed_alignment=True)
+                       output_dir, align_mode, record_failed_alignment=True)
     print("")
 
     # get reads that have mutation events within range
@@ -696,6 +704,12 @@ if __name__ == '__main__':
 
     print("Writing summary table to %s \n"%summary_table_fn)
     df.to_csv(summary_table_fn, sep='\t', index=False)
+    summary_table_excel = summary_table_fn.replace(".txt", ".xlsx")
+    print("Writing summary table in excel format to %s \n"%summary_table_excel)
+    df = df[list(df.columns[:-4]) + ['count']]
+    writer = pd.ExcelWriter(summary_table_excel)
+    df.to_excel(writer,'Sheet1', index=False)
+    writer.save()
 
     # write run metadata
     print("Writing run metadata to %s\n"%(run_info))
