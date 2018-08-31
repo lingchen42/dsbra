@@ -193,8 +193,8 @@ def main():
 
     # read in reference sequneces and reads
     ref = list(SeqIO.parse(args.ref, "fasta"))[0]
-    records = list(SeqIO.parse(args.fastq, "fastq"))
-    print("Reference sequence and %s reads loaded. Begin alignment..."%(len(records)))
+    records = SeqIO.parse(args.fastq, "fastq")
+    print("Reference sequence loaded. Begin alignment...")
 
     # perform the customed alignment and write to a SAM format output file
     with open(outfn, "w+") as outfh:
