@@ -1,16 +1,18 @@
 #!/usr/bin/env python
+import re
 import sys
 import math
+import warnings
+import argparse
 from Bio import pairwise2
 from Bio import SeqIO
 from Bio.pairwise2 import format_alignment
-import re
-import argparse
 from itertools import groupby
 from joblib import Parallel, delayed
 import matplotlib as mpl
 mpl.use("Agg")
 import matplotlib.pyplot as plt
+warnings.filterwarnings("ignore")
 
 # break site is 0-indexed, the position of the nucleotide right before the break site
 # edge distance:
@@ -120,13 +122,13 @@ def trim_aln(aln):
     return aln
 
 
-def align(X, Y, break_index, idx, align_mode, score_min=(20, 8),
+def align(X_seq, Y_seq, break_index, idx, align_mode, score_min=(20, 8),
           match=2, mismatch=-6, gap_open=-5, gap_extension=-2):
     '''
     align record X and record Y, generate a SAM format entry
     Args:
-        X: reference sequence in Biopython sequence record format
-        Y: query sequence in Biopython sequence record format
+        X_seq: reference sequenc, biopython sequence record seq attribute
+        Y_seq: query sequence, biopython sequence record seq attribute
         break_index: the position of break
         idx: the record index. It's for keep tracking of how many records the program has processed
         score_min: score function, y = a + b * ln(ref_seq)
@@ -136,29 +138,19 @@ def align(X, Y, break_index, idx, align_mode, score_min=(20, 8),
         gap_extension: gap extension penalty
 
     '''
-    if idx%500 == 0:
-        print("Record: %s"%idx)
+    if idx % 500 == 0: print("Aligning seq %s"%idx)
 
-    rname = X.name
-    qname = Y.name
-    mapq = "255"  # mapq = 255 means mapq is not available
-    rnext = "*"
-    pnext = "0"
-    #tlen = str(len(X.seq))
-    tlen = "0"
-    qual = "*"
-
-    score_min = score_min[0] + score_min[1] * math.log(len(X))
+    score_min = score_min[0] + score_min[1] * math.log(len(X_seq))
 
     if align_mode == "global":
-        fw_alns = pairwise2.align.globalms(X.seq, Y.seq, match,
+        fw_alns = pairwise2.align.globalms(X_seq, Y_seq, match,
                                            mismatch, gap_open, gap_extension)
-        rc_alns = pairwise2.align.globalms(X.seq, Y.seq.reverse_complement(),
+        rc_alns = pairwise2.align.globalms(X_seq, Y_seq.reverse_complement(),
                                       match, mismatch, gap_open, gap_extension)
     else:
-        fw_alns = pairwise2.align.localms(X.seq, Y.seq, match,
+        fw_alns = pairwise2.align.localms(X_seq, Y_seq, match,
                                            mismatch, gap_open, gap_extension)
-        rc_alns = pairwise2.align.localms(X.seq, Y.seq.reverse_complement(),
+        rc_alns = pairwise2.align.localms(X_seq, Y_seq.reverse_complement(),
                                       match, mismatch, gap_open, gap_extension)
         fw_alns = [trim_aln(aln) for aln in fw_alns]
         rc_alns = [trim_aln(aln) for aln in rc_alns]
@@ -167,18 +159,16 @@ def align(X, Y, break_index, idx, align_mode, score_min=(20, 8),
     if fw_alns[0][2] >= rc_alns[0][2]:
         alns = fw_alns
         flag = "0"
-        seq = str(Y.seq)
+        seq = str(Y_seq)
     else:
         alns = rc_alns
         flag = "16"
-        seq = str(Y.seq.reverse_complement())
+        seq = str(Y_seq.reverse_complement())
 
-    aln, cigar = choose_aln(alns, X.seq, break_index)
+    aln, cigar = choose_aln(alns, X_seq, break_index)
     if align_mode == "local":
         # in local alignemnt the cigar and the query seq may be different length because of the truncation
         seq = ''.join(re.findall('[AGCTN]+', aln[1]))
-        if Y.name == "A00252:48:H7532DSXX:2:1132:26250:3239":
-            print(cigar, len(cigar), seq, len(seq), aln)
 
     #consumed_bases = re.finditer('([^DNHP]+)', ''.join(cigar))
     #pos = str(consumed_bases.next().start() + 1)  # 1-based index
@@ -192,6 +182,32 @@ def align(X, Y, break_index, idx, align_mode, score_min=(20, 8),
     if score < score_min:
         flag = "4"
         pos = "0"
+
+    return Y_seq, flag, pos, cigar, seq, score
+
+
+def get_sam_entry(X, Y, idx, aln_d):
+    '''
+    align record X and record Y, generate a SAM format entry
+    Args:
+        X: reference sequence in Biopython sequence record format
+        Y: query sequence in Biopython sequence record format
+        break_index: the position of break
+        idx: the record index. It's for keep tracking of how many records the program has processed
+    '''
+    if idx%500 == 0:
+        print("Record: %s"%idx)
+
+    rname = X.name
+    qname = Y.name
+    mapq = "255"  # mapq = 255 means mapq is not available
+    rnext = "*"
+    pnext = "0"
+    #tlen = str(len(X.seq))
+    tlen = "0"
+    qual = "*"
+
+    flag, pos, cigar, seq, score = aln_d[str(Y.seq)]
 
     sam_entry = "\t".join([qname, flag, rname, pos, mapq, cigar, rnext, pnext, tlen, seq, qual]) + '\n'
 
@@ -227,21 +243,40 @@ def main():
     # read in reference sequneces and reads
     ref = list(SeqIO.parse(args.ref, "fasta"))[0]
     records = SeqIO.parse(args.fastq, "fastq")
-    print("Reference sequence and reads loaded. Begin alignment...")
+    print("Reference sequence and reads loaded...")
 
     # set up score_min for alignment
     score_min = (20, 8)
 
+    # uniq_seqs from the records, only perform alignment once for each seq
+    # dynamic programming? multiple processing?
+    print("Getting the alignment of uniq sequences...")
+    uniq_seqs = set()
+    for i, r in enumerate(records):
+        if i%500000 == 0: print(i)
+        uniq_seqs.add(r.seq)
+    uniq_seqs = list(uniq_seqs)
+
+    aln_results = Parallel(n_jobs=-1)(delayed(align)\
+                                     (ref.seq, uniq_seq, break_index,
+                                      idx, align_mode, score_min)
+                                      for idx, uniq_seq in enumerate(uniq_seqs))
+    aln_d = {}
+    for aln_result in aln_results:
+        aln_d[str(aln_result[0])] = aln_result[1:]
+
     # perform the customed alignment and write to a SAM format output file
     with open(outfn, "w+") as outfh:
+        print("Writing sam entry for %s reads..."%i)
         # write header
         outfh.write("@HD\tVN:1.0\tSO:unsorted\n")
         outfh.write("@SQ\tSN:%s\tLN:%s\n"%(ref.name, len(ref.seq)))
         outfh.write('''@PG\tID:custom_alignment_dsbra.py\tPN:custom_alignment_dsbra.py\tVN:NA\tCL:"%s"\n'''%(' '.join(sys.argv)))
-        sam_entries_n_score = Parallel(n_jobs=-1)(delayed(align)\
-                                                  (ref, record, break_index,
-                                                   idx, align_mode, score_min)\
-                                                   for idx, record in enumerate(records))
+        # read in the records generator again
+        records = SeqIO.parse(args.fastq, "fastq")
+        sam_entries_n_score = Parallel(n_jobs=-1, prefer="threads")\
+                (delayed(get_sam_entry)(ref, record, idx, aln_d)\
+                 for idx, record in enumerate(records))
         sam_entries, scores = map(list, zip(*sam_entries_n_score))
         print("Alignment complete. Writing to %s"%outfn)
         outfh.writelines(sam_entries)
