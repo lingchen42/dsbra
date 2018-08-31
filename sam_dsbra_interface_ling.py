@@ -591,7 +591,7 @@ def main():
                                  "apply count cutoff to the summary table"
                                  "based on the poisson distribution;"
                                  "default 0.001, 300")
-    arg_parser.add_argument("--full_table", action="store_true",
+    arg_parser.add_argument("--full_table", action="store_true", default=True,
                             help="Will generate a large table with"
                                  "repair pattern for each analyzed")
 #    arg_parser.add_argument( "--intermediate_files", action="store_true",
@@ -611,7 +611,6 @@ def main():
     else:
         os.makedirs(output_dir)
 
-    print("")
     align_mode = args.align_mode
     break_index = args.break_index
     margin = args.margin
