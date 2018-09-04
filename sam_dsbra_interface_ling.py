@@ -127,7 +127,7 @@ class RepairPattern:
         if not q_aln_locs[mut_start]:  # in case of deletion it will be NaN
             q_repair_start = q_aln_locs[mut_start-1]
         q_repair_end = q_aln_locs[mut_end]
-        if not q_aln_locs[mut_end]:  # in case of deletion it will be NaN
+        if not q_aln_locs[mut_end] and ((mut_end+1) < len(q_aln_locs)):  # in case of deletion it will be NaN
             q_repair_end = q_aln_locs[mut_end+1]
         q_repair_start_m = max(q_repair_start - q_repair_margin, 0)
         q_repair_end_m = min(q_repair_end + q_repair_margin, len(q_seq))
