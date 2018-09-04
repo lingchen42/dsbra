@@ -46,7 +46,8 @@ class RepairSample:
         self.total_samples
 
 class RepairPattern:
-    def __init__(self, read_name, reference_end):
+    def __init__(self, read, read_name, reference_end):
+        self.read = read
         self.read_name = read_name
         self.repair_size = 0
 
@@ -120,15 +121,30 @@ class RepairPattern:
         self.ref_mut_start = r_aln_locs[mut_start]
         if not self.ref_mut_start:  # in case of insertion, it will be NaN
             self.ref_mut_start = r_aln_locs[mut_start-1]
-        self.ref_mut_end = r_aln_locs[mut_end]
+        #if mut_end == len(ref_seq):
+        #    self.ref_mut_end = r_aln_locs[mut_end-1]
+        #else:
+        #    self.ref_mut_end = r_aln_locs[mut_end-1]
 
         # mut_start/end in reads
         q_repair_start = q_aln_locs[mut_start]
         if not q_aln_locs[mut_start]:  # in case of deletion it will be NaN
-            q_repair_start = q_aln_locs[mut_start-1]
-        q_repair_end = q_aln_locs[mut_end]
-        if not q_aln_locs[mut_end] and ((mut_end+1) < len(q_aln_locs)):  # in case of deletion it will be NaN
-            q_repair_end = q_aln_locs[mut_end+1]
+            if (mut_start-1) > 0:
+                q_repair_start = q_aln_locs[mut_start-1]
+            else:
+                q_repair_start = 0
+
+        if mut_end == len(ref_seq):  # in case the deletion extends to the end
+            q_repair_end = q_aln_locs[mut_end-1]
+        else:
+            q_repair_end = q_aln_locs[mut_end]
+        if not q_repair_end:  # in case of deletion it will be NaN
+            if ((mut_end+1) < len(q_aln_locs)):
+                q_repair_end = q_aln_locs[mut_end+1]
+            else:
+                # in case the deletion extends to the end
+                q_repair_end = len(q_seq) - 1
+
         q_repair_start_m = max(q_repair_start - q_repair_margin, 0)
         q_repair_end_m = min(q_repair_end + q_repair_margin, len(q_seq))
         self.actual_seq_near_break = q_seq[q_repair_start_m : q_repair_end_m]
@@ -186,8 +202,8 @@ def get_ref(ref_fa, output_dir, run_name):
     return ref_seq
 
 
-def aln(sam_filename, ref_fa, fastq_name, break_index, run_metadata, output_dir,
-        align_mode, record_failed_alignment=True):
+def aln(sam_filename, ref_fa, fastq_name, break_index, output_dir, df_run_info,
+        run_info, align_mode, record_failed_alignment=True):
     '''
     Customed aligner. Among alignments with highest scores, choose the one with
     mutation events cloest to the break site.
@@ -197,7 +213,7 @@ def aln(sam_filename, ref_fa, fastq_name, break_index, run_metadata, output_dir,
         fastq_name: the path to the read fastq file
         break_index: where the break occurs. O-indexed, the position of the
                      nucleotide right before the break site.
-        run_metadata: run_metadata dictionary. For recording alignment summary
+        df_run_info: For recording alignment summary
         record_failed_alignment: Whether write the failed alignment to a file.
     Returns:
         run_metadata: run_metadata dictionary with alignment summary
@@ -208,12 +224,16 @@ def aln(sam_filename, ref_fa, fastq_name, break_index, run_metadata, output_dir,
     with open(os.devnull, 'wb') as out:
         if not os.path.exists(sam_filename):  # if no corresponding SAM file, do the alignment
             print("\nStart alignment...")
-            run_metadata['alignment_settings'] =\
-              './custom_alignment_dsbra.py -o %s --ref %s -f %s -b %s --align_mode %s'\
-                    %(sam_filename, ref_fa, fastq_name, break_index, align_mode)
-            print(run_metadata['alignment_settings'])
-            subprocess.call(run_metadata['alignment_settings'], shell=True)
+            df_run_info['alignment_settings'] =\
+              './custom_alignment_dsbra.py -o %s --run_info %s --ref %s -f %s -b %s --align_mode %s'\
+                    %(sam_filename, run_info, ref_fa, fastq_name, break_index, align_mode)
+            # save the run info because custom alignment will need to read it
+            df_run_info.to_csv(run_info, index=False)
+            print(df_run_info['alignment_settings'][0])
+            subprocess.call(df_run_info['alignment_settings'], shell=True)
             print("Alignment completed. The alignment file is:\n%s\n"%sam_filename)
+            # read back the dataframe
+            df_run_info = pd.read_table(run_info).T
         else:
             print("Alignment file %s already exist. Will use the existing alignment file."%sam_filename)
 
@@ -235,14 +255,14 @@ def aln(sam_filename, ref_fa, fastq_name, break_index, run_metadata, output_dir,
                                           + sam_filename, shell=True)
     n_success_aln = subprocess.check_output('''awk 'FNR > 3 {if($2!=4){s += 1}} END{print s}' '''\
                                           + sam_filename, shell=True)
-    run_metadata['num_failed_alignments'] = n_failed_aln.strip()
-    run_metadata['num_success_alignments'] =  n_success_aln.strip()
+    df_run_info['num_failed_alignments'] = n_failed_aln.strip()
+    df_run_info['num_success_alignments'] = n_success_aln.strip()
 
-    return run_metadata
+    return df_run_info
 
 
 def mut_within_margin(sam_filename, mut_bamfile_name, non_mut_samfile_name,
-                      ref_seq, break_index, margin, run_metadata):
+                      ref_seq, break_index, margin, df_run_info):
     '''
     Reads with mutation within margin.
     Args:
@@ -320,9 +340,9 @@ def mut_within_margin(sam_filename, mut_bamfile_name, non_mut_samfile_name,
     finally:
         os.remove(non_mut_path)
 
-    run_metadata['coverage'] = int(np.mean(coverage_list))
-    run_metadata['num_reads_with_mutations_within_range'] = len(mut_reads_list)
-    run_metadata['num_reads_without_mutations_within_range'] = len(non_mut_reads_list)
+    df_run_info['coverage'] = int(np.mean(coverage_list))
+    df_run_info['num_reads_with_mutations_within_range'] = len(mut_reads_list)
+    df_run_info['num_reads_without_mutations_within_range'] = len(non_mut_reads_list)
 
     #Close and sort/index new bamfile
     mut_bamfile.close()
@@ -335,7 +355,7 @@ def mut_within_margin(sam_filename, mut_bamfile_name, non_mut_samfile_name,
 
     print "First scan and sorting ended. Total time: " + str(time.time()-start_time) + "\n..."
 
-    return run_metadata
+    return df_run_info
 
 
 def check_microhomo_one_way(ref_seq, del_start_loc, del_len, m, mode='fw'):
@@ -426,7 +446,7 @@ def mutation_pattern(read, ref_seq, break_index, margin, last_margin,
         rp: RepairPattern class object
     '''
 
-    rp = RepairPattern(read.query_name, read.reference_end)
+    rp = RepairPattern(read, read.query_name, read.reference_end)
 
     q_aln_locs, r_aln_locs = zip(*read.get_aligned_pairs())  # the length of these two should be equal to the sum of cigar
     q_aln_locs = list(q_aln_locs)
@@ -479,7 +499,7 @@ def mutation_pattern(read, ref_seq, break_index, margin, last_margin,
 
         loc += event_len  # update current loc
 
-    mut_range = [i for i in mut_range if i]
+    mut_range = [i for i in mut_range if i!=None]
 
     # if it's a compound mutation (not a single deletion or insertion),
     # then use the last margin to extend the region to find repair pattern
@@ -509,7 +529,7 @@ def get_rp(read, ref_seq, rp_entries, break_index, margin, last_margin,
         return rp_entries
 
 
-def get_summary_table(repair_pattern_table_fn, run_metadata,
+def get_summary_table(repair_pattern_table_fn, df_run_info,
                       non_mut_samfile_name):
 
     # Reading the table from file solves the problem caused by a python list in
@@ -531,7 +551,7 @@ def get_summary_table(repair_pattern_table_fn, run_metadata,
     wt_entry['ref_mut_start'] = 0
     wt_entry['ref_mut_end'] = 0
     try:
-        wt_entry['count'] = run_metadata["num_reads_without_mutations_within_range"]
+        wt_entry['count'] = df_run_info["num_reads_without_mutations_within_range"][0]
     except KeyError:
         cmd = "wc -l < %s"%non_mut_samfile_name
         wt_count = int(subprocess.check_output(cmd, shell=True))
@@ -545,12 +565,12 @@ def get_summary_table(repair_pattern_table_fn, run_metadata,
     return df
 
 
-def apply_count_cutoff(df, run_metadata, p=0.001, num_colony=300):
+def apply_count_cutoff(df, df_run_info, p=0.001, num_colony=300):
     '''
     based on poisson distribution, apply count cutoff to the data
     '''
-    total_reads = int(run_metadata['num_failed_alignments']) \
-                  + int(run_metadata['num_success_alignments'])
+    total_reads = int(df_run_info['num_failed_alignments'][0]) \
+                  + int(df_run_info['num_success_alignments'][0])
     expected_reads = total_reads / num_colony
     count_cutoff = poisson.ppf(p, expected_reads)
     print("Using %s as count cutoff\n"%round(count_cutoff, 2))
@@ -604,9 +624,6 @@ def main():
     # set global values
     output_dir = args.out_dir
     if os.path.exists(output_dir) :
-        #print("Error! The output directory %s already exists. Please use a"
-        #      "different name or delete the exisiting output directory."%(output_dir))
-        #sys.exit(1)
         print("WARNING! Overwritting the existing output directory %s."%(output_dir))
     else:
         os.makedirs(output_dir)
@@ -632,41 +649,38 @@ def main():
                                                "%s_repair_pattern_full_table.txt"%(run_name))
 
     output_filename = os.path.join(output_dir, "%s_repair_pattern_summary.txt"%run_name)
-    run_info = os.path.join(output_dir, '%s_run_info.txt'%run_name)
-
-    with open(run_info, 'a+') as fh:
-        fh.write("\n")
-        fh.write('Time: %s\nWorking Directory:\n%s\nCommand:\n%s\n'\
-                  %(str(datetime.now())[:-7],
-                    os.getcwd(),
-                    ' '.join(sys.argv)))
-
+    run_info = os.path.join(output_dir, '%s_run_info.csv'%run_name)
 
     # read in reference fasta, write to new file after checking filetype
     ref_seq = get_ref(ref_fa, output_dir, run_name)
 
-    # store run info
-    run_metadata = [('timestamp', str(datetime.now())),
-                    ('ref_filename', ref_fa),\
-                    ('fastq_file', fastq_name),\
-                    ('ref_seq', ref_seq),\
-                    ('break_index', break_index), \
-                    ('margin', margin)]
-    run_metadata = OrderedDict(run_metadata)  # to print in a specific order
-
+    # record run info
+    try:
+        df_run_info = pd.read_csv(run_info)
+    except:
+        df_run_info = pd.DataFrame()
+    df_run_info['fastq_file'] = fastq_name
+    df_run_info["time"] = [str(datetime.now())[:-7]]
+    df_run_info["working_dir"] = os.getcwd()
+    df_run_info["commad"] = ' '.join(sys.argv)
+    df_run_info['break_index'] = break_index
+    df_run_info['margin'] = margin
+    df_run_info["ref_filename"] = ref_fa
+    df_run_info['ref_seq'] = ref_seq
 
     # customed aligner
-    run_metadata = aln(sam_filename, ref_fa, fastq_name, break_index, run_metadata,
-                       output_dir, align_mode, record_failed_alignment=True)
+    df_run_info = aln(sam_filename, ref_fa, fastq_name, break_index, output_dir,
+                      df_run_info, run_info, align_mode,
+                      record_failed_alignment=True)
     print("")
 
     # get reads that have mutation events within range
     if os.path.exists(mut_bamfile_name):
         print("Already filtered for reads with mutations within range in %s"%mut_bamfile_name)
     else:
-        run_metadata = mut_within_margin(sam_filename, mut_bamfile_name,
+        df_run_info = mut_within_margin(sam_filename, mut_bamfile_name,
                                          non_mut_samfile_name, ref_seq,
-                                         break_index, margin, run_metadata)
+                                         break_index, margin, df_run_info)
 
     # analyzing the repair pattern of each read, store in a table
     bamfile = pysam.AlignmentFile(mut_bamfile_name+".sorted.bam","rb")
@@ -694,16 +708,16 @@ def main():
 
     # generate summary table of reads. Groups reads with the same repair pattern
     df = get_summary_table(repair_pattern_table_fn,
-                           run_metadata, non_mut_samfile_name)
+                           df_run_info, non_mut_samfile_name)
     # the reads made to the end (repair pattern analyzed reads) can be different
     # from reads_with_mutations_within_range
     # because some reads can only mismatches within range, but not immediately close to break index and got filtered out
-    run_metadata['Repair pattern analyzed reads'] = df['count'].sum()
+    df_run_info['Repair pattern analyzed reads'] = df['count'].sum()
 
     # apply count cutoff
     if args.count_cutoff:
         print("\nApply count cutoff...")
-        df = apply_count_cutoff(df, run_metadata,
+        df = apply_count_cutoff(df, df_run_info,
                                 p=args.count_cutoff[0],
                                 num_colony=args.count_cutoff[1])
 
@@ -718,10 +732,7 @@ def main():
 
     # write run metadata
     print("Writing run metadata to %s\n"%(run_info))
-    with open(run_info, 'a') as fh:
-        for key, item in run_metadata.iteritems():
-            if key != 'timestamp':
-                fh.write("%s:\n%s\n"%(key, item))
+    df_run_info.to_csv(run_info, index=False)
 
     print("Complete!")
     print "Total time: " + str(time.time()-start_time)
