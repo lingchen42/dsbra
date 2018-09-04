@@ -60,7 +60,9 @@ min_count <- opt$min_count
 
 # Mutation Event Frequency by Type, bar
 if (opt$mut_type){
-    df$mutation_type <- factor(df$mutation_type, levels = df[order(df$count), ]$mutation_type)
+#    df$mutation_type <- factor(df$mutation_type, levels = df[order(df$count), ]$mutation_type)
+    # order by deletion insertion compound WT
+     df$mutation_type <- factor(df$mutation_type, levels = c("Deletion", "Insertion", "Compound", "WT"))
     p <- ggplot(data=df, aes(x=mutation_type, y=count)) +
          geom_bar(stat="identity", width=.5) +
          labs(x='Mutation Type', y='Count', title='Mutation Event Frequency by Type') +
