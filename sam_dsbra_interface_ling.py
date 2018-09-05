@@ -265,106 +265,6 @@ def aln(sam_filename, ref_fa, fastq_name, break_index, output_dir, df_run_info,
     return df_run_info
 
 
-def mut_within_margin(sam_filename, mut_bamfile_name, non_mut_samfile_name,
-                      ref_seq, break_index, margin, df_run_info, max_depth):
-    '''
-    Reads with mutation within margin.
-    Args:
-        sam_filename: alignment file
-        mut_bamfile_name: mutated reads bamfile name
-        non_mut_samfile_name: not mutated reads bamfile name
-        run_metadata: run_metadata dictionary. For recording average coverage of
-                      bases within margin and number of qualified reads.
-    Returns:
-        run_metadata
-        It will also write the qualified reads to a file.
-
-    '''
-
-    bamfile = pysam.AlignmentFile(sam_filename+'.sorted.bam','rb')
-
-    # VERSION 0.0.4 -- Mutational database now incorporates
-    # First pass on SAM/BAM file creates secondary file
-    # with all reads requiring further evaluation (non-WT within margin)
-    reads_list = [ ]
-    mut_reads_list = [ ]
-
-    if os.path.exists(mut_bamfile_name):
-        print "ERROR: File \"%s\" exists."%mut_bamfile_name
-        sys.exit(1)
-
-    mut_bamfile = pysam.AlignmentFile(mut_bamfile_name,"wh", template=bamfile,
-                                      reference_names=bamfile.references,
-                                      reference_lengths=bamfile.lengths)
-
-    print("...\nBeginning first scan of SAM file...")
-    start_time = time.time()
-
-    #Find average coverage within margin
-    coverage_list = []
-
-    for pileupcolumn in bamfile.pileup(bamfile.references[0],
-                                       start=break_index-margin+1, # break index 84, we want [75, 95)
-                                       end=break_index+margin+1,
-                                       truncate=True,
-                                       max_depth=max_depth):
-        coverage_list.append(pileupcolumn.n)
-
-        for pileupread in pileupcolumn.pileups:
-            qname = pileupread.alignment.query_name
-            reads_list.append(qname)
-
-            if qname in mut_reads_list:
-                continue
-
-            mutated = False
-
-            # is there is indel
-            if pileupread.indel != 0 or pileupread.is_del:
-                mutated = True
-            # is there is a mismatch
-            else:
-                if ref_seq[pileupcolumn.pos] != \
-                   pileupread.alignment.query_sequence[pileupread.query_position]:
-                    mutated = True
-
-            if mutated:
-                mut_reads_list.append(qname)
-                mut_bamfile.write(pileupread.alignment)
-
-#    non_mut_reads_list = list(set(reads_list) - set(mut_reads_list))
-#    non_mut_fh, non_mut_path = tempfile.mkstemp()
-#    try:
-#        with os.fdopen(non_mut_fh, 'w') as tmp:
-#            print("Writing reads without mutations within range to file %s"%non_mut_samfile_name)
-#            for r in non_mut_reads_list:
-#                tmp.write(r+"\n")
-#        cmd = 'grep -f %s %s > %s'%(non_mut_path, sam_filename, non_mut_samfile_name)
-#        subprocess.call(cmd, shell=True)
-#    finally:
-#        os.remove(non_mut_path)
-
-    df_run_info['coverage'] = int(np.mean(coverage_list))
-    df_run_info['num_reads_with_mutations_within_range'] = len(mut_reads_list)
-    df_run_info['num_reads_without_mutations_within_range'] =\
-            df_run_info['num_success_alignments'][0] - len(mut_reads_list)
-    print("Reads with mutations %s"%len(mut_reads_list))
-#    df_run_info['num_reads_without_mutations_within_range'] = len(non_mut_reads_list)
-
-    #Close and sort/index new bamfile
-    mut_bamfile.close()
-    with open(os.devnull, 'wb') as out:
-        subprocess.call(SAMTOOLS_FOLDER+'samtools view -@ 8 -bS '+mut_bamfile_name+' | '+SAMTOOLS_FOLDER+'samtools sort -@ 8 -o '\
-            +mut_bamfile_name+'.sorted.bam', shell=True, stdout = out)
-        subprocess.call(SAMTOOLS_FOLDER+'samtools index '+ mut_bamfile_name + '.sorted.bam ' + mut_bamfile_name + '.sorted.bai',\
-            shell=True, stdout = out)
-    bamfile.close()
-
-    print "First scan and sorting ended. Total time: " + str(time.time()-start_time) + "\n..."
-
-    return df_run_info
-
-
 def check_microhomo_one_way(ref_seq, del_start_loc, del_len, m, mode='fw'):
     is_mmej = False
     microhomology = ''
@@ -506,7 +406,7 @@ def mutation_pattern(read, ref_seq, break_index, margin, last_margin,
 
         loc += event_len  # update current loc
 
-    mut_range = [i for i in mut_range if i!=None]
+    #mut_range = [i for i in mut_range if i!=None]
 
     # if it's a compound mutation (not a single deletion or insertion),
     # then use the last margin to extend the region to find repair pattern
@@ -517,27 +417,30 @@ def mutation_pattern(read, ref_seq, break_index, margin, last_margin,
     # if the mismatch > mismatch_cutoff, but there are no other mutation events within break +/- margin
     # then the mut_bottom_range or mut_top_range may have not been changed. However, it's likely
     # sequencing error, we are going to ignore this read.
-       return "skipped"
+        return ("WT", rp)
 
-    return rp
+    return ("Mut", rp)
 
 
 def get_rp(read, ref_seq, rp_entries, break_index, margin, last_margin,
            q_repair_margin):
-        rp = mutation_pattern(read, ref_seq, break_index, margin, last_margin)
-        if rp != 'skipped':
+        result = mutation_pattern(read, ref_seq, break_index, margin, last_margin)
+        rp = result[1]
+        if result[0] != 'WT':
             rp.get_repair_sequence(read, ref_seq, q_repair_margin)
-            for key in rp_entries.keys():
-                if key != "num_mismatch":
-                    rp_entries[key].append(getattr(rp, key))
-            rp_entries['num_mismatch'].append((rp.num_transitions\
-                                               + rp.num_transversions))
+        else:
+            rp.repair_sequence = 'WT'
+
+        for key in rp_entries.keys():
+             if key != "num_mismatch":
+                 rp_entries[key].append(getattr(rp, key))
+        rp_entries['num_mismatch'].append((rp.num_transitions\
+                                          + rp.num_transversions))
 
         return rp_entries
 
 
-def get_summary_table(repair_pattern_table_fn, df_run_info,
-                      non_mut_samfile_name):
+def get_summary_table(repair_pattern_table_fn, df_run_info):
 
     # Reading the table from file solves the problem caused by a python list in
     # a cell. Otherwise it cannot be grouped appropriately
@@ -549,22 +452,6 @@ def get_summary_table(repair_pattern_table_fn, df_run_info,
     cols_to_grp = [c for c in cols_order if c not in ['count', 'actual_seq_near_break']]
     df = df.groupby(cols_to_grp, as_index=False).agg({'count':'sum',
                                                       'actual_seq_near_break':'first'})
-
-    # add entry for WT
-    wt_entry = pd.Series()
-    for f in list(df.columns[:-1]):
-        wt_entry[f] = ""
-    wt_entry['repair_size'] = 0
-    wt_entry['ref_mut_start'] = 0
-    wt_entry['ref_mut_end'] = 0
-    try:
-        wt_entry['count'] = df_run_info["num_reads_without_mutations_within_range"][0]
-    except KeyError:
-        cmd = "wc -l < %s"%non_mut_samfile_name
-        wt_count = int(subprocess.check_output(cmd, shell=True))
-        wt_entry['count'] = wt_count
-    df = df.append(wt_entry, ignore_index=True)
-
     df['mut_freq'] = df['count'] / (df['count'].sum())
     df = df.sort_values(by='count', ascending=False)
     df = df[cols_order]
@@ -648,8 +535,6 @@ def main():
     q_repair_margin = args.q_repair_margin
     last_margin = args.last_margin
 
-    mut_bamfile_name = os.path.join(output_dir, "%s_mut_reads.sam"%(run_name))
-    non_mut_samfile_name = os.path.join(output_dir, "%s_non_mut_reads.sam"%(run_name))
     summary_table_fn = os.path.join(output_dir, "%s_repair_pattern_summary_table.txt"%(run_name))
     if args.full_table:
         repair_pattern_table_fn = os.path.join(output_dir, \
@@ -681,18 +566,9 @@ def main():
                       record_failed_alignment=True)
     print("")
 
-    # get reads that have mutation events within range
-    if os.path.exists(mut_bamfile_name):
-        print("Already filtered for reads with mutations within range in %s"%mut_bamfile_name)
-    else:
-        max_depth = df_run_info["num_success_alignments"][0]
-        df_run_info = mut_within_margin(sam_filename, mut_bamfile_name,
-                                         non_mut_samfile_name, ref_seq,
-                                         break_index, margin, df_run_info,
-                                         max_depth)
-
     # analyzing the repair pattern of each read, store in a table
-    bamfile = pysam.AlignmentFile(mut_bamfile_name+".sorted.bam","rb")
+    print("Analyzing repair pattern...")
+    bamfile = pysam.AlignmentFile(sam_filename+".sorted.bam","rb")
 
     fields = ['read_name', 'repair_size', 'mismatch_locations',
               'new_mismatch_bases', 'num_mismatch', 'num_transitions',
@@ -716,12 +592,15 @@ def main():
         df.to_csv(repair_pattern_table_fn, sep="\t", index=False)
 
     # generate summary table of reads. Groups reads with the same repair pattern
-    df = get_summary_table(repair_pattern_table_fn,
-                           df_run_info, non_mut_samfile_name)
+    df = get_summary_table(repair_pattern_table_fn, df_run_info)
     # the reads made to the end (repair pattern analyzed reads) can be different
     # from reads_with_mutations_within_range
     # because some reads can only mismatches within range, but not immediately close to break index and got filtered out
     df_run_info['Repair pattern analyzed reads'] = df['count'].sum()
+    df_run_info['Number of wild type'] = int(df[df['repair_sequence']=='WT']['count'])
+    df_run_info['Number of mutated reads'] =\
+        df_run_info['Repair pattern analyzed reads'][0]\
+        - df_run_info['Number of wild type'][0]
 
     # apply count cutoff
     if args.count_cutoff:
