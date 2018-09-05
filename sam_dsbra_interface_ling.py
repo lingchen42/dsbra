@@ -233,7 +233,7 @@ def aln(sam_filename, ref_fa, fastq_name, break_index, output_dir, df_run_info,
             subprocess.call(df_run_info['alignment_settings'], shell=True)
             print("Alignment completed. The alignment file is:\n%s\n"%sam_filename)
             # read back the dataframe
-            df_run_info = pd.read_table(run_info).T
+            df_run_info = pd.read_csv(run_info)
         else:
             print("Alignment file %s already exist. Will use the existing alignment file."%sam_filename)
 
