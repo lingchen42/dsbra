@@ -244,25 +244,29 @@ def aln(sam_filename, ref_fa, fastq_name, break_index, output_dir, df_run_info,
 
     # output the failed alignment to a file
     if record_failed_alignment:
-        failed_alignment_fn = os.path.join(output_dir, sam_filename.split("/")[-1][:-4] + '_failed_alignment.sam')
+        failed_alignment_fn = os.path.join(output_dir,
+                     sam_filename.split("/")[-1][:-4] + '_failed_alignment.sam')
         print("Writing failed_alignment to %s"%failed_alignment_fn)
         failed_aln = subprocess.call("awk 'FNR > 3 {if($2==4){print $0}}' "\
-                                     + sam_filename + '>' +  failed_alignment_fn,
+                                    + sam_filename + '>' +  failed_alignment_fn,
                                      shell=True)
 
     # summary of alignment
-    n_failed_aln = subprocess.check_output('''awk 'FNR > 3 {if($2==4){failed += 1}} END{print failed}' '''\
-                                          + sam_filename, shell=True)
-    n_success_aln = subprocess.check_output('''awk 'FNR > 3 {if($2!=4){s += 1}} END{print s}' '''\
-                                          + sam_filename, shell=True)
-    df_run_info['num_failed_alignments'] = n_failed_aln.strip()
-    df_run_info['num_success_alignments'] = n_success_aln.strip()
+    cmd = SAMTOOLS_FOLDER +'samtools flagstat %s'%(sam_filename + '.sorted.bam')
+    aln_stats = subprocess.check_output(cmd, shell=True)
+    n_total = int(aln_stats.split('\n')[0].split(' + ')[0])
+    n_success_aln = int(aln_stats.split('\n')[4].split(' + ')[0])
+    n_failed_aln = n_total - n_success_aln
+    df_run_info['num_total_aligned_reads'] = n_total
+    df_run_info['num_failed_alignments'] = n_failed_aln
+    df_run_info['num_success_alignments'] = n_success_aln
+    print("success alignments: %s"%n_success_aln)
 
     return df_run_info
 
 
 def mut_within_margin(sam_filename, mut_bamfile_name, non_mut_samfile_name,
-                      ref_seq, break_index, margin, df_run_info):
+                      ref_seq, break_index, margin, df_run_info, max_depth):
     '''
     Reads with mutation within margin.
     Args:
@@ -303,7 +307,7 @@ def mut_within_margin(sam_filename, mut_bamfile_name, non_mut_samfile_name,
                                        start=break_index-margin+1, # break index 84, we want [75, 95)
                                        end=break_index+margin+1,
                                        truncate=True,
-                                       max_depth=250000):
+                                       max_depth=max_depth):
         coverage_list.append(pileupcolumn.n)
 
         for pileupread in pileupcolumn.pileups:
@@ -328,21 +332,24 @@ def mut_within_margin(sam_filename, mut_bamfile_name, non_mut_samfile_name,
                 mut_reads_list.append(qname)
                 mut_bamfile.write(pileupread.alignment)
 
-    non_mut_reads_list = list(set(reads_list) - set(mut_reads_list))
-    non_mut_fh, non_mut_path = tempfile.mkstemp()
-    try:
-        with os.fdopen(non_mut_fh, 'w') as tmp:
-            print("Writing reads without mutations within range to file %s"%non_mut_samfile_name)
-            for r in non_mut_reads_list:
-                tmp.write(r+"\n")
-        cmd = 'grep -f %s %s > %s'%(non_mut_path, sam_filename, non_mut_samfile_name)
-        subprocess.call(cmd, shell=True)
-    finally:
-        os.remove(non_mut_path)
+#    non_mut_reads_list = list(set(reads_list) - set(mut_reads_list))
+#    non_mut_fh, non_mut_path = tempfile.mkstemp()
+#    try:
+#        with os.fdopen(non_mut_fh, 'w') as tmp:
+#            print("Writing reads without mutations within range to file %s"%non_mut_samfile_name)
+#            for r in non_mut_reads_list:
+#                tmp.write(r+"\n")
+#        cmd = 'grep -f %s %s > %s'%(non_mut_path, sam_filename, non_mut_samfile_name)
+#        subprocess.call(cmd, shell=True)
+#    finally:
+#        os.remove(non_mut_path)
 
     df_run_info['coverage'] = int(np.mean(coverage_list))
     df_run_info['num_reads_with_mutations_within_range'] = len(mut_reads_list)
-    df_run_info['num_reads_without_mutations_within_range'] = len(non_mut_reads_list)
+    df_run_info['num_reads_without_mutations_within_range'] =\
+            df_run_info['num_success_alignments'][0] - len(mut_reads_list)
+    print("Reads with mutations %s"%len(mut_reads_list))
+#    df_run_info['num_reads_without_mutations_within_range'] = len(non_mut_reads_list)
 
     #Close and sort/index new bamfile
     mut_bamfile.close()
@@ -678,9 +685,11 @@ def main():
     if os.path.exists(mut_bamfile_name):
         print("Already filtered for reads with mutations within range in %s"%mut_bamfile_name)
     else:
+        max_depth = df_run_info["num_success_alignments"][0]
         df_run_info = mut_within_margin(sam_filename, mut_bamfile_name,
                                          non_mut_samfile_name, ref_seq,
-                                         break_index, margin, df_run_info)
+                                         break_index, margin, df_run_info,
+                                         max_depth)
 
     # analyzing the repair pattern of each read, store in a table
     bamfile = pysam.AlignmentFile(mut_bamfile_name+".sorted.bam","rb")
