@@ -176,7 +176,7 @@ def align(X_seq, Y_seq, break_index, idx, align_mode, pcr_tail_seq, min_len,
         gap_extension: gap extension penalty
 
     '''
-    if idx % 500 == 0: print("Aligning seq %s"%idx)
+    if idx % 1000 == 0: print("Aligning seq %s"%idx)
 
     ori_y_seq = Y_seq
     Y_seq = remove_pcr_tail(Y_seq, pcr_tail_seq, min_len)
@@ -262,7 +262,7 @@ def get_sam_entry(X, Y, pcr_tail_seq, min_len, idx, aln_d):
         break_index: the position of break
         idx: the record index. It's for keep tracking of how many records the program has processed
     '''
-    if idx%500 == 0:
+    if idx%5000 == 0:
         print("Record: %s"%idx)
 
     rname = X.name
