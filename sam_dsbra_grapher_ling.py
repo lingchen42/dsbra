@@ -77,7 +77,7 @@ def apply_count_cutoff(df, p=0.001, num_colony=300):
 
 def get_mutation_event_freq(df, summary_fn):
     def assign_mutation_type(x):
-        if not x['repair_sequence']:
+        if (x['repair_sequence']=='') or (x['repair_sequence']=='WT'):
             return "WT"
         elif x['num_deletions'] + x['num_insertions'] + x['num_mismatch'] > 1:
             # if more than 1 mutation event
