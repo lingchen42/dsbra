@@ -159,7 +159,8 @@ def insertion_len_dist(df):
 
 
 def aligned_mut(df):
-    df = df.sort_values("repair_size", ascending=False)
+    df["sort"] = df['repair_size'].abs()
+    df = df.sort_values("sort", ascending=True)
 
     indices_start = []
     indices_end = []
@@ -180,13 +181,14 @@ def aligned_mut(df):
         repair_cigar_tuples = row['repair_cigar_tuples']
         if repair_cigar_tuples:
             loc = mut_start
+            region_len = sum(zip(*repair_cigar_tuples)[1])
             for event_type, event_len in repair_cigar_tuples:
                 indices_start.append(idx_start)
                 indices_end.append(idx_end)
                 types.append(cigar_d[event_type])
                 mut_starts.append(loc)
                 counts.append(row['count'])
-                region_lens.append(event_len)
+                region_lens.append(region_len)
                 if event_type == 1:  # insertion does not consume ref bases
                     mut_ends.append(loc+0.9)  # just to make it visible
                 else:
@@ -246,6 +248,8 @@ if __name__ == '__main__':
                             help="the start reference base to show aligned mutation events")
     arg_parser.add_argument("--break_index", type=int, default=None,
                             help="the index of break site")
+    arg_parser.add_argument("--fts", type=int, default=14,
+                            help="axis font size; default 14")
     arg_parser.add_argument("--count_cutoff", nargs=2, type=float, default=None,
                             help="take probability cutoff, number of colonies,"
                                  "apply count cutoff to the summary table"
@@ -267,6 +271,8 @@ if __name__ == '__main__':
     output_dir = args.out_dir
     if not os.path.exists(output_dir): os.makedirs(output_dir)
 
+    # fts
+    fts = args.fts
 
     print("Writing output to %s ..."%output_dir)
 
@@ -316,7 +322,7 @@ if __name__ == '__main__':
             # call R
             seq_with_del_outplot = os.path.join(output_dir,
                                               '%s_sequences_with_deletion_events.png'%summary_name)
-            subprocess.call("%s --input %s --del_seq"%(r, seq_with_del_outfn), shell=True)
+            subprocess.call("%s --input %s --del_seq --fts %s"%(r, seq_with_del_outfn, fts), shell=True)
 
         if args.ins_len or args.all:
             dft = insertion_len_dist(df)
@@ -344,7 +350,7 @@ if __name__ == '__main__':
             dft = seq_counts(df, mode='repair_seq')
             repair_pattern_outfn = os.path.join(output_dir, '%s_sequences_with_mutation_events.csv'%summary_name)
             dft.to_csv(repair_pattern_outfn)
-            subprocess.call("%s --input %s --repair_seq"%(r, repair_pattern_outfn), shell=True)
+            subprocess.call("%s --input %s --repair_seq --fts %s"%(r, repair_pattern_outfn, fts), shell=True)
 
         if args.aligned_mutations or args.all:
             if break_index:
