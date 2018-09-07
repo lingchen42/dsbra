@@ -55,8 +55,8 @@ class RepairPattern:
         self.repair_cigar_tuples = []
         # repair seq neighbourhood (+/- q_repair_margin on either side of the  mut range)in query seq
         self.actual_seq_near_break = ''
-        self.mut_bottom_range = reference_end  # for the first comparison
-        self.mut_top_range = -1  # for the first comparison
+        self.mut_bottom_range = None
+        self.mut_top_range = None
         self.ref_mut_start = 0
         self.ref_mut_end  = reference_end
 
@@ -119,16 +119,17 @@ class RepairPattern:
 
         # mut_start/end in ref for repair seq
         self.ref_mut_start = r_aln_locs[mut_start]
-        if not self.ref_mut_start:  # in case of insertion, it will be NaN
+        if self.ref_mut_start == None:  # in case of insertion, it will be None; don't use if not, because 0 is the start index
             self.ref_mut_start = r_aln_locs[mut_start-1]
-        #if mut_end == len(ref_seq):
-        #    self.ref_mut_end = r_aln_locs[mut_end-1]
-        #else:
-        #    self.ref_mut_end = r_aln_locs[mut_end-1]
+
+        if mut_end < len(r_aln_locs):  # incase the deletion extends to the end
+            self.ref_mut_end = r_aln_locs[mut_end]
+        else:
+            self.ref_mut_end = r_aln_locs[mut_end-1]
 
         # mut_start/end in reads
         q_repair_start = q_aln_locs[mut_start]
-        if not q_aln_locs[mut_start]:  # in case of deletion it will be NaN
+        if q_aln_locs[mut_start] == None:  # in case of deletion it will be NaN
             if (mut_start-1) > 0:
                 q_repair_start = q_aln_locs[mut_start-1]
             else:
@@ -138,7 +139,7 @@ class RepairPattern:
             q_repair_end = q_aln_locs[mut_end-1]
         else:
             q_repair_end = q_aln_locs[mut_end]
-        if not q_repair_end:  # in case of deletion it will be NaN
+        if  q_repair_end == None:  # in case of deletion it will be NaN
             if ((mut_end+1) < len(q_aln_locs)):
                 q_repair_end = q_aln_locs[mut_end+1]
             else:
@@ -170,10 +171,8 @@ class RepairPattern:
                 self.repair_size -= event_len
             elif event_type == 7:  # match
                 repair_seq += "*"*event_len
-                self.repair_size += event_len
             elif event_type == 8:  # mismatch
                 repair_seq += q_seq[q_loc : q_loc + event_len]
-                self.repair_size += event_len
             else:
                 print("Error! Unexpected cigar number %s detected"%event_type)
                 sys.exit(1)
@@ -384,7 +383,7 @@ def mutation_pattern(read, ref_seq, break_index, margin, last_margin,
                 if abs(break_index - r_loc) <= mismatch_cutoff:
                     mut_range.extend([loc, loc + event_len])
                     for l in range(loc, loc + event_len):
-                        rp.add_mismatch(loc, read.query_sequence[q_aln_locs[l]],
+                        rp.add_mismatch(l, read.query_sequence[q_aln_locs[l]],
                                         ref_seq[r_aln_locs[l]])
 
             elif event_type == 1:    # insertion
@@ -405,8 +404,6 @@ def mutation_pattern(read, ref_seq, break_index, margin, last_margin,
                 return "skipped"
 
         loc += event_len  # update current loc
-
-    #mut_range = [i for i in mut_range if i!=None]
 
     # if it's a compound mutation (not a single deletion or insertion),
     # then use the last margin to extend the region to find repair pattern
@@ -527,11 +524,9 @@ def main():
     margin = args.margin
     fastq_name = args.fastq
     ref_fa = args.ref_fa
-    run_name = fastq_name.split("/")[-1].split(".")[0] \
+    run_name = fastq_name.split("/")[-1].replace('.gz', '').split(".")[0] \
                + '_b%s_m%s'%(break_index, margin)
-    sam_filename = os.path.join(output_dir,
-                          os.path.basename(fastq_name[:fastq_name.rfind('.')])\
-                          + '_%s_aln.sam'%align_mode)
+    sam_filename = os.path.join(output_dir, run_name + '_%s_aln.sam'%align_mode)
     q_repair_margin = args.q_repair_margin
     last_margin = args.last_margin
 
