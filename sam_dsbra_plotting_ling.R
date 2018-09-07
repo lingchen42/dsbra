@@ -12,7 +12,7 @@ option_list <- list(
                 help="plot deletion_lens.csv,\
                 plot Frequency of Deletions by Length"),
     make_option("--del_seq", action='store_true', default=FALSE,
-                help="plot sequences_with_deletion_events.csv\
+                help="plot sequences_with_deletion_events.csv,\
                 plot Sequences with Deletion Event"),
     make_option("--min_count", default=0,
                 help="determine how the minimum counts to include in\
@@ -34,7 +34,9 @@ option_list <- list(
     make_option("--ref_top", type="integer",
                 help="the end reference base to show aligned mutation events"),
     make_option("--break_index", type="integer",
-                help="the index of break site")
+                help="the index of break site"),
+    make_option("--fts", type="integer", default=14,
+                help="axis text font size; default 14" )
     )
 opt <- parse_args(OptionParser(option_list=option_list))
 
@@ -47,6 +49,9 @@ outname <- sprintf('%s.png', basename)
 print(sprintf('Writing to %s', outname))
 
 min_count <- opt$min_count
+
+axis_fts <- opt$fts
+annot_fts <- axis_fts/2
 
 # Mutation Event Frequency by Type, pie
 #if (opt$mut_type){
@@ -62,7 +67,9 @@ min_count <- opt$min_count
 if (opt$mut_type){
 #    df$mutation_type <- factor(df$mutation_type, levels = df[order(df$count), ]$mutation_type)
     # order by deletion insertion compound WT
-     df$mutation_type <- factor(df$mutation_type, levels = c("Deletion", "Insertion", "Compound", "WT"))
+     df$mutation_type <- factor(df$mutation_type,
+                                levels = c("Deletion", "Insertion", "Mismatch",
+                                           "Compound", "WT", "Unclear"))
     p <- ggplot(data=df, aes(x=mutation_type, y=count)) +
          geom_bar(stat="identity", width=.5) +
          labs(x='Mutation Type', y='Count', title='Mutation Event Frequency by Type') +
@@ -89,10 +96,10 @@ if (opt$del_seq){
     p <- ggplot(data=df[order(-df$count),], aes(x=sequence, y=count)) +
     geom_bar(stat="identity", width=.5) +
     labs(x='Sequences', y='Count', title='Sequences With Deletion Events') +
-    geom_text(aes(label=count), position=position_dodge(width=0.9), hjust=-0.3, size=4*20/nrow(df)) +
+    geom_text(aes(label=count), position=position_dodge(width=0.9), hjust=-0.3, size=annot_fts) +
     theme_bw() +
-    theme(aspect.ratio = 1 * nrow(df) / 20,
-          axis.text=element_text(size=14*20/nrow(df))) +
+    theme(aspect.ratio = nrow(df)/20,
+         axis.text = element_text(size=axis_fts)) +
     coord_flip(ylim = c(0, max(df$count) * 1.2))
     ggsave(filename=outname, plot=p)
 }
@@ -129,10 +136,10 @@ if (opt$repair_seq){
     p <- ggplot(data=df[order(-df$count),], aes(x=sequence, y=count)) +
     geom_bar(stat="identity", width=.5) +
     labs(x='Sequences', y='Count', title='Repair Patterns') +
-    geom_text(aes(label=count), position=position_dodge(width=0.9), hjust=-0.3, size=4*20/nrow(df)) +
+    geom_text(aes(label=count), position=position_dodge(width=0.9), hjust=-0.3, size=annot_fts) +
     theme_bw() +
-    theme(aspect.ratio = 1 * nrow(df) / 20,
-          axis.text=element_text(size=14*20/nrow(df))) +
+    theme(aspect.ratio = nrow(df)/20,
+          axis.text = element_text(size=axis_fts)) +
     coord_flip(ylim = c(0, max(df$count) * 1.2))
     tryCatch(ggsave(filename=outname, plot=p), error= function(err){print('repair patterns fails')})
 }
@@ -164,8 +171,8 @@ if (opt$aligned_mutations){
 
     df2 <- data.frame(idx_start = df$idx_start,
                       idx_end = df$idx_end,
-                      mut_start = rep(ref_seq_range[1], nrow(df)) - break_index,
-                      mut_end = rep(ref_seq_range[2], nrow(df)) - break_index,
+                      mut_start = rep(ref_seq_range[1], nrow(df)) - break_index - 1,
+                      mut_end = rep(ref_seq_range[2], nrow(df)) - break_index - 1,
                       type = rep('matched', nrow(df)),
                       region_len = NA,
                       count = df$count)
