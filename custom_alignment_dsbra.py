@@ -2,6 +2,7 @@
 import re
 import sys
 import math
+import gzip
 import warnings
 import argparse
 from scipy import stats
@@ -31,7 +32,8 @@ def repetitions(s):
             return len(match.group(0))/len(match.group(1))
 
 
-def remove_pcr_tail(q_seq, pcr_tail_seq, min_len, min_score=20,
+def remove_pcr_tail(q_seq, pcr_tail_seq, min_len, pcr_primer1, pcr_primer2,
+                    check_n_nuc_at_end, min_score=20,
                     max_end_repeats=5, fuzzy_len=8):
     q_seq = str(q_seq)
     # if find a perfect match for the pcr_tail
@@ -42,7 +44,10 @@ def remove_pcr_tail(q_seq, pcr_tail_seq, min_len, min_score=20,
 
     # sometimes there is not a perfect match but see a lot of repeats at the end
     # then look more closely for possible pcr_tail_seq
-    elif repetitions(q_seq) > max_end_repeats:
+    #elif repetitions(q_seq) > max_end_repeats:
+
+    # sometimes there is not a perfect match but a fuzzy match
+    else:
         aln = pairwise2.align.localms(pcr_tail_seq, q_seq, 2, -6, -5, -2)[0]
         if aln[2] > min_score:
             # find the match > fuzzy_len bps
@@ -50,13 +55,27 @@ def remove_pcr_tail(q_seq, pcr_tail_seq, min_len, min_score=20,
              re.finditer("(=){%s,}"%fuzzy_len, ''.join(aln2cigar(aln)))]
             if fuzzym:
                 # truncate q_seq to only keep anything before the pcr_tail_seq
-                q_seq = re.findall("[AGCTN]+", aln[1][:fuzzym[0]])
+                try:
+                    q_seq = re.findall("[AGCTN]+", aln[1][:fuzzym[0]])[0]
+                except:
+                    # in case no match
+                    q_seq = ''
 
+    out_seq = False
     if len(q_seq) > min_len:
-        return Seq(q_seq)
-    else:
-        return False
+        # require the read to start with pcr primer seq (fuzzy matched)
+        # and end with part of the reverse primer seq
+        primer_match_score = pairwise2.align.localms(pcr_primer1,
+                                                     q_seq[:len(pcr_primer1)],
+                                                     2, -6, -5, -2)[0][2]
+        if primer_match_score > min_score:
+            if pcr_primer2 != '-1':  # if we are going to check reverse primer
+                if (q_seq[-check_n_nuc_at_end:] in pcr_primer2):
+                    out_seq = Seq(q_seq)
+            else:
+                out_seq = Seq(q_seq)
 
+    return out_seq
 
 def aln2cigar(aln):
     ref = aln[0]
@@ -160,6 +179,7 @@ def trim_aln(aln):
 
 
 def align(X_seq, Y_seq, break_index, idx, align_mode, pcr_tail_seq, min_len,
+          pcr_primer1, pcr_primer2, check_n_nuc_at_end,
           score_min=(20, 8), strand="Unknown", match=2, mismatch=-6,
           gap_open=-5, gap_extension=-2):
     '''
@@ -179,7 +199,8 @@ def align(X_seq, Y_seq, break_index, idx, align_mode, pcr_tail_seq, min_len,
     if idx % 1000 == 0: print("Aligning seq %s"%idx)
 
     ori_y_seq = Y_seq
-    Y_seq = remove_pcr_tail(Y_seq, pcr_tail_seq, min_len)
+    Y_seq = remove_pcr_tail(Y_seq, pcr_tail_seq, min_len,
+                            pcr_primer1, pcr_primer2, check_n_nuc_at_end)
     if Y_seq != False:  # if it's a valid read, align it
         score_min = score_min[0] + score_min[1] * math.log(len(X_seq))
 
@@ -253,6 +274,43 @@ def align(X_seq, Y_seq, break_index, idx, align_mode, pcr_tail_seq, min_len,
         return ori_y_seq, None
 
 
+def align_wrapper(X_seq, Y_seq, break_index, idx, align_mode, pcr_tail_seq, min_len,
+          pcr_primer1, pcr_primer2, check_n_nuc_at_end,
+          score_min=(20, 8), strand="Unknown", cigar_len_check=30,
+          match=2, mismatch=-6, gap_open=-5, gap_extension=-2):
+    '''
+    Perform check on the cigar string. If too complicated, try use the other
+    alignment method
+    '''
+    aln_results = align(X_seq, Y_seq, break_index,
+                        idx, align_mode, pcr_tail_seq, min_len,
+                        pcr_primer1, pcr_primer2,
+                        check_n_nuc_at_end,
+                        score_min, strand)
+
+    opposite_align = {'global':'local', 'local':'global'}
+    if aln_results[1] != None:
+        cigar = aln_results[3]
+        # check if cigar is too complicated
+        # if it is, use another alignment method
+        if len(cigar) > cigar_len_check:
+            align_mode = opposite_align[align_mode]
+#            print("complicated cigar detected %s, try %s alignment"%(cigar,
+#                                                                     align_mode))
+            other_aln_results = align(X_seq, Y_seq, break_index,
+                                idx, align_mode, pcr_tail_seq, min_len,
+                                pcr_primer1, pcr_primer2,
+                                check_n_nuc_at_end,
+                                score_min, strand)
+            other_cigar = other_aln_results[3]
+            if (len(other_cigar) < len(cigar)) and\
+               (re.findall('^[0-9]+(.{1})', other_cigar)[0] != 'D'):   # don't start with deletion
+#                print('simpler cigar %s found with %s'%(other_cigar, align_mode))
+                aln_results = other_aln_results
+
+    return aln_results
+
+
 def get_sam_entry(X, Y, pcr_tail_seq, min_len, idx, aln_d):
     '''
     align record X and record Y, generate a SAM format entry
@@ -288,6 +346,8 @@ def main():
     arg_parser = argparse.ArgumentParser(description="Customed aligment for dsbra")
     arg_parser.add_argument("-o", "--outfn", required=True,
                             help="output SAM filename")
+    arg_parser.add_argument("--not_valid_reads", default=False,
+                            help="output not valid reads")
     arg_parser.add_argument("--run_info", required=True,
                             help="store alignment statistics")
     arg_parser.add_argument("--align_mode", required=True, choices=["global",
@@ -296,6 +356,10 @@ def main():
                             help="reads in fastq format for alignment")
     arg_parser.add_argument("--ref", required=True,
                             help="reference sequence")
+    arg_parser.add_argument("--pcr_primer1", required=True,
+                            help="primer seq, at the begining of the ref seq; will require the read to starts with this primer seq")
+    arg_parser.add_argument("--pcr_primer2", default=-1,
+                            help="primer seq, at the end of the ref seq; will require last 4 nucleotide of the read is part of this primer seq; if not used, use -1")
     arg_parser.add_argument("--pcr_tail_seq",
                             default="ATCGGAAGAGCACACGTCTGAACTCCAGTCAC",
                             help="added sequence for PCR;default ATCGGAAGAGCACACGTCTGAACTCCAGTCAC")
@@ -319,15 +383,29 @@ def main():
     # run info
     run_info = args.run_info
 
+    # not valid reads
+    not_valid_reads = args.not_valid_reads
+
     # read in reference sequneces and reads
     ref = list(SeqIO.parse(args.ref, "fasta"))[0]
-    records = SeqIO.parse(args.fastq, "fastq")
+    if args.fastq[-2:] == 'gz':
+        fastq_fh = gzip.open(args.fastq, "rt")
+        records = SeqIO.parse(fastq_fh, "fastq")
+    else:
+        records = SeqIO.parse(args.fastq, "fastq")
     print("Reference sequence and reads loaded...")
 
     # params for removing pcr tail seq
     pcr_tail_seq = args.pcr_tail_seq
     min_len = args.min_len
     print("Will use %s and minimum length of %sbp to filter out primer/dimer"%(pcr_tail_seq, min_len))
+
+    # params for checking primer existance
+    pcr_primer1 = args.pcr_primer1
+    pcr_primer2 = args.pcr_primer2
+    check_n_nuc_at_end = 4
+    print("Will require a fuzzy match of %s at the begining of the seq"%pcr_primer1)
+    print("Will require last 4 nucleotides in the read in %s"%pcr_primer2)
 
     # set up score_min for alignment
     score_min = (20, 8)
@@ -347,9 +425,11 @@ def main():
     seq_to_check_start = 0
     seq_to_check_end = 100
     while strand == "Unknown":  # in case the first 100 doesnot align
-        aln_results = Parallel(n_jobs=-1)(delayed(align)\
+        aln_results = Parallel(n_jobs=-1)(delayed(align_wrapper)\
                                          (ref.seq, uniq_seq, break_index,
                                           idx, align_mode, pcr_tail_seq, min_len,
+                                          pcr_primer1, pcr_primer2,
+                                          check_n_nuc_at_end,
                                           score_min, strand)\
                                           for idx, uniq_seq in\
                      enumerate(uniq_seqs[seq_to_check_start:seq_to_check_end]))
@@ -371,14 +451,24 @@ def main():
     print("\nStrand %s detacted using first %s sequences\n"%(strand, seq_to_check_end))
 
     # do the alignment for the rest of seqs
-    aln_results = Parallel(n_jobs=-1)(delayed(align)\
+    aln_results = Parallel(n_jobs=-1)(delayed(align_wrapper)\
                                      (ref.seq, uniq_seq, break_index,
                                       idx, align_mode, pcr_tail_seq, min_len,
+                                      pcr_primer1, pcr_primer2,
+                                      check_n_nuc_at_end,
                                       score_min, strand)\
                                       for idx, uniq_seq in\
                                       enumerate(uniq_seqs[seq_to_check_end:]))
-    for aln_result in aln_results:
-        aln_d[str(aln_result[0])] = aln_result[1:]
+    if not_valid_reads:
+        print("Writing not valid reads to %s"%not_valid_reads)
+        with open(not_valid_reads, 'w+') as not_valid_reads_fh:
+            for aln_result in aln_results:
+                aln_d[str(aln_result[0])] = aln_result[1:]
+                if not aln_result[1]:  # output not valid reads
+                    not_valid_reads_fh.write(str(aln_result[0]) + '\n')
+    else:
+        for aln_result in aln_results:
+            aln_d[str(aln_result[0])] = aln_result[1:]
 
     # perform the customed alignment and write to a SAM format output file
     with open(outfn, "w+") as outfh:

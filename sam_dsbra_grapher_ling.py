@@ -226,6 +226,10 @@ if __name__ == '__main__':
                             help="output directory, default is plots_%s/"%str(datetime.now())[:10])
     arg_parser.add_argument("-i", "--input_files", nargs='+', required=True,
                             help="the output txt files from sam_dsbra_interface.py")
+    arg_parser.add_argument("--run_info",
+                            help="the run_info csv files from sam_dsbra_interface.py")
+    arg_parser.add_argument('--align_stats', action='store_true',
+                            help="plot run_info.csv, plot alignment stats by Type")
     arg_parser.add_argument("--all", action='store_true',
                             help="plot all types of plots")
     arg_parser.add_argument("--mut_type", action='store_true',
@@ -248,8 +252,8 @@ if __name__ == '__main__':
                             help="the start reference base to show aligned mutation events")
     arg_parser.add_argument("--break_index", type=int, default=None,
                             help="the index of break site")
-    arg_parser.add_argument("--fts", type=int, default=14,
-                            help="axis font size; default 14")
+    arg_parser.add_argument("--fts", type=int, default=6,
+                            help="axis font size; default 6")
     arg_parser.add_argument("--count_cutoff", nargs=2, type=float, default=None,
                             help="take probability cutoff, number of colonies,"
                                  "apply count cutoff to the summary table"
@@ -273,6 +277,7 @@ if __name__ == '__main__':
 
     # fts
     fts = args.fts
+    print("Using font size %s"%fts)
 
     print("Writing output to %s ..."%output_dir)
 
@@ -289,6 +294,24 @@ if __name__ == '__main__':
             p, num_colony = args.count_cutoff
             df = apply_count_cutoff(df, p, num_colony)
 
+        if args.align_stats or args.all:
+            try:
+                dft = pd.read_csv(args.run_info)
+                cols = ['n_primerdimer', 'num_failed_alignments', 'Number of wild type', 'Number of mutated reads']
+                dft = dft[cols]
+                dft.columns = ['not valid', 'failed alignments', 'WT', 'Mutated']
+                dft = dft.T.reset_index()
+                dft.columns = ['alignstatus', 'count']
+                alignstats_outfn = os.path.join(output_dir,
+                                          '%s_align_stats.csv'%summary_name)
+                dft.to_csv(alignstats_outfn)
+                alignstats_outplot = os.path.join(output_dir,'%s_align_stats_pie.png'%summary_name)
+                subprocess.call("%s --input %s --outname %s --align_stats"\
+                            %(r, alignstats_outfn, alignstats_outplot), shell=True)
+            except ValueError:
+                print("Must specify run info table with --run_info")
+
+
         # plot mutaion type frequency distribution
         if args.mut_type or args.all:
             dft = get_mutation_event_freq(df, summary_fn)
@@ -297,9 +320,14 @@ if __name__ == '__main__':
             dft.to_csv(typedist_outfn)
 
             # call R plot script
-            typedist_outplot = os.path.join(output_dir,
-                                          '%s_mutation_event_frequency_by_type.png'%summary_name)
-            subprocess.call("%s --input %s --mut_type"%(r, typedist_outfn), shell=True)
+            typedist_outplot1 = os.path.join(output_dir,
+                                          '%s_mutation_event_frequency_by_type_bar.png'%summary_name)
+            subprocess.call("%s --input %s --outname %s --mut_type_bar"\
+                            %(r, typedist_outfn, typedist_outplot1), shell=True)
+            typedist_outplot2 = os.path.join(output_dir,
+                                          '%s_mutation_event_frequency_by_type_pie.png'%summary_name)
+            subprocess.call("%s --input %s --outname %s --mut_type_pie"\
+                            %(r, typedist_outfn, typedist_outplot2), shell=True)
 
         # plot deletion events: Frequency of Deletions by Length
         if args.del_len or args.all:
@@ -311,7 +339,8 @@ if __name__ == '__main__':
             # call R
             del_freq_outplot = os.path.join(output_dir,
                                           '%s_deletion_lens.png'%summary_name)
-            subprocess.call("%s --input %s --del_len"%(r, del_freq_outfn), shell=True)
+            subprocess.call("%s --input %s --outname %s --del_len"\
+                            %(r, del_freq_outfn, del_freq_outplot), shell=True)
 
         if args.del_seq or args.all:
             dft = seq_counts(df, mode='deletion')
@@ -322,7 +351,8 @@ if __name__ == '__main__':
             # call R
             seq_with_del_outplot = os.path.join(output_dir,
                                               '%s_sequences_with_deletion_events.png'%summary_name)
-            subprocess.call("%s --input %s --del_seq --fts %s"%(r, seq_with_del_outfn, fts), shell=True)
+            subprocess.call("%s --input %s --outname %s --del_seq --fts %s"\
+                            %(r, seq_with_del_outfn, seq_with_del_outplot, fts), shell=True)
 
         if args.ins_len or args.all:
             dft = insertion_len_dist(df)
@@ -333,7 +363,8 @@ if __name__ == '__main__':
             # call R
             ins_freq_outplot = os.path.join(output_dir,
                                           '%s_insertion_lens.png'%summary_name)
-            subprocess.call("%s --input %s --ins_len"%(r, ins_freq_outfn), shell=True)
+            subprocess.call("%s --input %s --outname %s --ins_len"\
+                            %(r, ins_freq_outfn, ins_freq_outplot), shell=True)
 
         if args.ins_seq or args.all:
             dft = seq_counts(df, mode='insertion')
@@ -344,21 +375,29 @@ if __name__ == '__main__':
             # call R
             seq_with_ins_outplot = os.path.join(output_dir,
                                               '%s_sequences_with_insertion_events.png'%summary_name)
-            subprocess.call("%s --input %s --ins_seq"%(r, seq_with_ins_outfn), shell=True)
+            subprocess.call("%s --input %s --outname %s --ins_seq"\
+                            %(r, seq_with_ins_outfn, seq_with_ins_outplot), shell=True)
 
         if args.repair_seq or args.all:
             dft = seq_counts(df, mode='repair_seq')
-            repair_pattern_outfn = os.path.join(output_dir, '%s_sequences_with_mutation_events.csv'%summary_name)
+            repair_pattern_outfn = os.path.join(output_dir,
+                                                '%s_sequences_with_mutation_events.csv'%summary_name)
             dft.to_csv(repair_pattern_outfn)
-            subprocess.call("%s --input %s --repair_seq --fts %s"%(r, repair_pattern_outfn, fts), shell=True)
+            repair_pattern_outplot = os.path.join(output_dir,
+                                                  '%s_sequences_with_mutation_events.png'%summary_name)
+            subprocess.call("%s --input %s --outname %s --repair_seq --fts %s"\
+                            %(r, repair_pattern_outfn, repair_pattern_outplot, fts), shell=True)
 
         if args.aligned_mutations or args.all:
             if break_index:
                 dft = aligned_mut(df)
-                aligned_mut_outfn = os.path.join(output_dir, '%s_aligned_mutation_events.csv'%summary_name)
+                aligned_mut_outfn = os.path.join(output_dir,
+                                                 '%s_aligned_mutation_events.csv'%summary_name)
                 dft.to_csv(aligned_mut_outfn)
-                subprocess.call("%s --input %s --aligned_mutations --break_index %s --ref_bottom %s --ref_top %s"\
-                                %(r, aligned_mut_outfn, break_index, ref_bottom, ref_top), shell=True)
+                aligned_mut_outplot = os.path.join(output_dir,
+                                                   '%s_aligned_mutation_events.png'%summary_name)
+                subprocess.call("%s --input %s --outname %s --aligned_mutations --break_index %s --ref_bottom %s --ref_top %s"\
+                                %(r, aligned_mut_outfn, aligned_mut_outplot, break_index, ref_bottom, ref_top), shell=True)
             else:
                 print("Error generating alignment plot. Please provide break index using --break_index.")
 

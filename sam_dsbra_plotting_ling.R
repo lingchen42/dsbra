@@ -5,7 +5,14 @@ suppressPackageStartupMessages(library(ggplot2))
 # read in arguments
 option_list <- list(
     make_option('--input', help='input file'),
-    make_option('--mut_type', action='store_true', default=FALSE,
+    make_option('--outname', help='output file'),
+    make_option('--align_stats', action='store_true', default=FALSE,
+                help="plot run_info.csv,\
+                      plot alignment stats by Type"),
+    make_option('--mut_type_pie', action='store_true', default=FALSE,
+                help="plot mutation_event_frequency_by_type.csv,\
+                      plot Mutation Event Frequency by Type"),
+    make_option('--mut_type_bar', action='store_true', default=FALSE,
                 help="plot mutation_event_frequency_by_type.csv,\
                       plot Mutation Event Frequency by Type"),
     make_option("--del_len", action='store_true', default=FALSE,
@@ -35,17 +42,18 @@ option_list <- list(
                 help="the end reference base to show aligned mutation events"),
     make_option("--break_index", type="integer",
                 help="the index of break site"),
-    make_option("--fts", type="integer", default=14,
-                help="axis text font size; default 14" )
+    make_option("--fts", type="integer", default=6,
+                help="axis text font size; default 6" )
     )
 opt <- parse_args(OptionParser(option_list=option_list))
 
 # read input dataframe
 df <- read.csv(opt$input)
-basename <- tools::file_path_sans_ext(opt$input)
+#basename <- tools::file_path_sans_ext(opt$input)
 
 # output name
-outname <- sprintf('%s.png', basename)
+#outname <- sprintf('%s.png', basename)
+outname <- opt$outname
 print(sprintf('Writing to %s', outname))
 
 min_count <- opt$min_count
@@ -53,18 +61,28 @@ min_count <- opt$min_count
 axis_fts <- opt$fts
 annot_fts <- axis_fts/2
 
+# Alignment statistics, pie
+if (opt$align_stats){
+    png(outname)
+    dft <- t(data.frame(count=df$count, row.names = df$alignstatus))
+    lbls <- paste(colnames(dft), "\n", df$count)
+    pie(dft, labels = lbls,
+        main="Alignment status distribution")
+    dev.off()
+}
+
 # Mutation Event Frequency by Type, pie
-#if (opt$mut_type){
-#    png(outname)
-#    dft <- t(data.frame(count=df$count, row.names = df$mutation_type))
-#    lbls <- paste(colnames(dft), "\n", df$count)
-#    pie(dft, labels = lbls,
-#        main="Mutation Event Frequency by Type")
-#    dev.off()
-#}
+if (opt$mut_type_pie){
+    png(outname)
+    dft <- t(data.frame(count=df$count, row.names = df$mutation_type))
+    lbls <- paste(colnames(dft), "\n", df$count)
+    pie(dft, labels = lbls,
+        main="Mutation Event Frequency by Type")
+    dev.off()
+}
 
 # Mutation Event Frequency by Type, bar
-if (opt$mut_type){
+if (opt$mut_type_bar){
 #    df$mutation_type <- factor(df$mutation_type, levels = df[order(df$count), ]$mutation_type)
     # order by deletion insertion compound WT
      df$mutation_type <- factor(df$mutation_type,
