@@ -77,6 +77,7 @@ def remove_pcr_tail(q_seq, pcr_tail_seq, min_len, pcr_primer1, pcr_primer2,
 
     return out_seq
 
+
 def aln2cigar(aln):
     ref = aln[0]
     q = aln[1]
@@ -178,6 +179,26 @@ def trim_aln(aln):
     return aln
 
 
+def is_large_del(cigar, max_mismatches=3):
+    '''
+    large deletion should have cigar string like:
+        37=116D18=1I
+        or
+        25=52D4=20D70=1I
+        or
+        25=52D4=20D15=1X14=1X39=1I
+    criteria 1: The sequence in seq should always be found in ref_seq allowing
+              some mismatches, that is n_mismatches < some cutoff.
+    criterial 2: Should have part of primer 1 at the begining (already
+              filtered during valid/not valid read) part.
+    '''
+    n_mismatches = sum([int(i) for i in re.findall('([0-9]+)X', cigar)])
+    if n_mismatches <= max_mismatches:
+        return True
+    else:
+        return False
+
+
 def align(X_seq, Y_seq, break_index, idx, align_mode, pcr_tail_seq, min_len,
           pcr_primer1, pcr_primer2, check_n_nuc_at_end,
           score_min=(20, 8), strand="Unknown", match=2, mismatch=-6,
@@ -261,14 +282,15 @@ def align(X_seq, Y_seq, break_index, idx, align_mode, pcr_tail_seq, min_len,
 
         # list cigar to string cigar
         groups = groupby(cigar)
-        cigar = ''.join(["%s%s"%(sum(1 for _ in group), label) for label, group in groups])
+        cigar_str = ''.join(["%s%s"%(sum(1 for _ in group), label) for label, group in groups])
 
         score = aln[2]
         if score < score_min:
-            flag = "4"
-            pos = "0"
+            if not is_large_del(cigar_str):
+                flag = "4"
+                pos = "0"
 
-        return ori_y_seq, flag, pos, cigar, seq, score
+        return ori_y_seq, flag, pos, cigar_str, seq, score
 
     else:
         return ori_y_seq, None
