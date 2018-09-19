@@ -6,7 +6,10 @@ suppressPackageStartupMessages(library(ggplot2))
 option_list <- list(
     make_option('--input', help='input file'),
     make_option('--outname', help='output file'),
-    make_option('--align_stats', action='store_true', default=FALSE,
+    make_option('--align_stats_bar', action='store_true', default=FALSE,
+                help="plot run_info.csv,\
+                      plot alignment stats by Type"),
+    make_option('--align_stats_pie', action='store_true', default=FALSE,
                 help="plot run_info.csv,\
                       plot alignment stats by Type"),
     make_option('--mut_type_pie', action='store_true', default=FALSE,
@@ -62,13 +65,28 @@ axis_fts <- opt$fts
 annot_fts <- axis_fts/2
 
 # Alignment statistics, pie
-if (opt$align_stats){
+if (opt$align_stats_pie){
     png(outname)
     dft <- t(data.frame(count=df$count, row.names = df$alignstatus))
     lbls <- paste(colnames(dft), "\n", df$count)
     pie(dft, labels = lbls,
         main="Alignment status distribution")
     dev.off()
+}
+
+# Mutation Event Frequency by Type, bar
+if (opt$align_stats_bar){
+     df$alignstatus <- factor(df$alignstatus,
+                                levels = c("Mutated", "WT",
+                                           "not valid", "failed alignments"))
+    p <- ggplot(data=df, aes(x=alignstatus, y=count)) +
+         geom_bar(stat="identity", width=.5) +
+         labs(x='Alignment Status', y='Count', title='Alignment status distribution') +
+         geom_text(aes(label=count), position=position_dodge(width=0.9),
+                   vjust=-0.3, size=3) +
+         theme_bw() +
+         theme(aspect.ratio = 0.6)
+    ggsave(filename=outname, plot=p)
 }
 
 # Mutation Event Frequency by Type, pie

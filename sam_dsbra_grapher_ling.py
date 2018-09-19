@@ -159,14 +159,12 @@ def insertion_len_dist(df):
 
 
 def aligned_mut(df):
-#    df["sort"] = df['repair_size'].abs()
     df_wt = df[df['repair_sequence']=='WT']
     df_del = df[(df['repair_size'] <= 0) & (df['repair_sequence']!='WT')]
     df_del = df_del.sort_values('repair_size', ascending=False)
     df_ins = df[df['repair_size'] > 0]
     df_ins = df_ins.sort_values('repair_size', ascending=True)
     df = pd.concat([df_wt, df_ins, df_del])
-#    df = df.sort_values("sort", ascending=True)
 
     indices_start = []
     indices_end = []
@@ -311,9 +309,12 @@ if __name__ == '__main__':
                 alignstats_outfn = os.path.join(output_dir,
                                           '%s_align_stats.csv'%summary_name)
                 dft.to_csv(alignstats_outfn)
-                alignstats_outplot = os.path.join(output_dir,'%s_align_stats_pie.png'%summary_name)
-                subprocess.call("%s --input %s --outname %s --align_stats"\
-                            %(r, alignstats_outfn, alignstats_outplot), shell=True)
+                alignstats_outplot1 = os.path.join(output_dir,'%s_align_stats_pie.png'%summary_name)
+                subprocess.call("%s --input %s --outname %s --align_stats_pie"\
+                            %(r, alignstats_outfn, alignstats_outplot1), shell=True)
+                alignstats_outplot2 = os.path.join(output_dir,'%s_align_stats_bar.png'%summary_name)
+                subprocess.call("%s --input %s --outname %s --align_stats_bar"\
+                            %(r, alignstats_outfn, alignstats_outplot2), shell=True)
             except ValueError:
                 print("Must specify run info table with --run_info")
 
