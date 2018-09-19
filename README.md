@@ -4,6 +4,9 @@ Analyze .fastq files for insertions, deletions, and microhomologous end joining 
 <p align="center">
   <img src="https://github.com/lingchen42/dsbra/blob/master/example_plots/RIF1_NFR_b84_m5_repair_pattern_summary_table_aligned_mutation_events.png"/>
 </p>
+<p align="center">
+  <img src="https://github.com/lingchen42/dsbra/blob/master/example_plots/RIF1_NFR_b84_m5_repair_pattern_summary_table_sequences_with_mutation_events.png"/>
+</p>
 
 ## Usage
 **1. Load necessary programs** (Here I use LMOD, which is applied to running this on vanderbilt ACCRE cluster.)
