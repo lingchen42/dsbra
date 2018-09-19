@@ -100,10 +100,11 @@ if (opt$mut_type_bar){
 # Frequency of Deletions by Length
 if (opt$del_len){
     p <- ggplot(df, aes(x=deletion_length)) +
-        geom_histogram(colour="black") +
+        geom_histogram(colour="black", binwidth=1) +
+        scale_x_continuous(breaks=seq(0, 170, 5), limits=c(0, 150)) +
         labs(x='Deletion Length (bp)', y='Count', title='Frequency of Deletions by Length') +
         theme_bw() +
-        theme(aspect.ratio = 0.6)
+        theme(aspect.ratio = 0.5)
     ggsave(filename=outname, plot=p)
 }
 
@@ -114,7 +115,8 @@ if (opt$del_seq){
     p <- ggplot(data=df[order(-df$count),], aes(x=sequence, y=count)) +
     geom_bar(stat="identity", width=.5) +
     labs(x='Sequences', y='Count', title='Sequences With Deletion Events') +
-    geom_text(aes(label=count), position=position_dodge(width=0.9), hjust=-0.3, size=annot_fts) +
+    geom_text(aes(label=count), position=position_dodge(width=0.9),
+              hjust=-0.3, size=annot_fts) +
     theme_bw() +
     theme(aspect.ratio = nrow(df)/20,
          axis.text = element_text(size=axis_fts)) +
@@ -126,7 +128,8 @@ if (opt$del_seq){
 # Frequency of Insertion by Length
 if (opt$ins_len){
     p <- ggplot(df, aes(x=insertion_length)) +
-        geom_histogram(colour="black") +
+        geom_histogram(colour="black", binwidth=1) +
+        scale_x_continuous(breaks=seq(0, 20, 1), limits=c(0, 20)) +
         labs(x='Insertion Length (bp)', y='Count', title='Frequency of Insertions by Length') +
         theme_bw() +
         theme(aspect.ratio = 0.6)

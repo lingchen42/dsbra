@@ -159,8 +159,14 @@ def insertion_len_dist(df):
 
 
 def aligned_mut(df):
-    df["sort"] = df['repair_size'].abs()
-    df = df.sort_values("sort", ascending=True)
+#    df["sort"] = df['repair_size'].abs()
+    df_wt = df[df['repair_sequence']=='WT']
+    df_del = df[(df['repair_size'] <= 0) & (df['repair_sequence']!='WT')]
+    df_del = df_del.sort_values('repair_size', ascending=False)
+    df_ins = df[df['repair_size'] > 0]
+    df_ins = df_ins.sort_values('repair_size', ascending=True)
+    df = pd.concat([df_wt, df_ins, df_del])
+#    df = df.sort_values("sort", ascending=True)
 
     indices_start = []
     indices_end = []
