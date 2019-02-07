@@ -60,7 +60,7 @@ def parse_files(summary_fns):
 
             samples[summary_fn] = data
 
-        return samples
+    return samples
 
 
 def apply_count_cutoff(df, p=0.001, num_colony=300):
@@ -72,7 +72,7 @@ def apply_count_cutoff(df, p=0.001, num_colony=300):
     count_cutoff = poisson.ppf(p, expected_reads)
     print("Using %s as count cutoff\n"%round(count_cutoff, 2))
     df = df[df['count'] >= count_cutoff]
-    return df
+    return df, count_cutoff
 
 
 def get_mutation_event_freq(df, summary_fn):
@@ -112,6 +112,16 @@ def del_len_dist(df):
             t_del_lens = [l] * row['count']
             del_lens.extend(t_del_lens)
     dft = pd.DataFrame({'deletion_length': del_lens})
+    return dft
+
+
+def repair_len_dist(df):
+    # get the length of all deletions
+    repair_lens = []
+    for index, row in df.iterrows():
+        t_repair_lens = [row["repair_size"]] * row['count']
+        repair_lens.extend(t_repair_lens)
+    dft = pd.DataFrame({'repair_size': repair_lens})
     return dft
 
 
@@ -296,7 +306,7 @@ if __name__ == '__main__':
         # apply count cutoff
         if args.count_cutoff:
             p, num_colony = args.count_cutoff
-            df = apply_count_cutoff(df, p, num_colony)
+            df, _ = apply_count_cutoff(df, p, num_colony)
 
         if args.align_stats or args.all:
             try:

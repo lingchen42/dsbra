@@ -501,7 +501,7 @@ def main():
         outfh.write('''@PG\tID:custom_alignment_dsbra.py\tPN:custom_alignment_dsbra.py\tVN:NA\tCL:"%s"\n'''%(' '.join(sys.argv)))
         # read in the records generator again
         records = SeqIO.parse(args.fastq, "fastq")
-        sam_entries_n_score = Parallel(n_jobs=-1, prefer="threads")\
+        sam_entries_n_score = Parallel(n_jobs=-1, backend="threading")\
                 (delayed(get_sam_entry)(ref, record, pcr_tail_seq, min_len,
                                         idx, aln_d)\
                  for idx, record in enumerate(records))
