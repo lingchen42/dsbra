@@ -48,18 +48,23 @@ def remove_pcr_tail(q_seq, pcr_tail_seq, min_len, pcr_primer1, pcr_primer2,
 
     # sometimes there is not a perfect match but a fuzzy match
     else:
-        aln = pairwise2.align.localms(pcr_tail_seq, q_seq, 2, -6, -5, -2)[0]
-        if aln[2] > min_score:
-            # find the match > fuzzy_len bps
-            fuzzym = [m.start() for m in \
-             re.finditer("(=){%s,}"%fuzzy_len, ''.join(aln2cigar(aln)))]
-            if fuzzym:
-                # truncate q_seq to only keep anything before the pcr_tail_seq
-                try:
-                    q_seq = re.findall("[AGCTN]+", aln[1][:fuzzym[0]])[0]
-                except:
-                    # in case no match
-                    q_seq = ''
+        try:
+            aln = pairwise2.align.localms(pcr_tail_seq, q_seq, 2, -6, -5, -2)[0]
+            if aln[2] > min_score:
+                # if the match is exact at > fuzzy_len positions
+                fuzzym = [m.start() for m in \
+                 re.finditer("(=){%s,}"%fuzzy_len, ''.join(aln2cigar(aln)))]
+                if fuzzym:
+                    # truncate q_seq to only keep anything before the pcr_tail_seq
+                    try:
+                        q_seq = re.findall("[AGCTN]+", aln[1][:fuzzym[0]])[0]
+                    except:
+                        # in case no match
+                        q_seq = ''
+        except:
+            print("Falied to remove pcr tail for seq %s, skip"%q_seq)
+            aln = pairwise2.align.localms(pcr_tail_seq, q_seq, 2, -6, -5, -2)
+            print(aln, pcr_tail_seq, q_seq)
 
     out_seq = False
     if len(q_seq) > min_len:
