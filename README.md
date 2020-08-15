@@ -110,10 +110,54 @@ The results will be in the `rif1_nfr_wt` directory as specified by `-o`,  includ
 <br>
 
 **6. To plot the results, run the `sam_dsbra_grapher_ling.py`.**
+```
+usage: sam_dsbra_grapher_ling.py [-h] [-R R] [-o OUT_DIR] -i INPUT_FILES
+                                 [INPUT_FILES ...] [--run_info RUN_INFO]
+                                 [--align_stats] [--all] [--mut_type]
+                                 [--del_len] [--del_seq] [--ins_len]
+                                 [--ins_seq] [--repair_seq]
+                                 [--aligned_mutations]
+                                 [--ref_bottom REF_BOTTOM] [--ref_top REF_TOP]
+                                 [--break_index BREAK_INDEX] [--fts FTS]
+                                 [--count_cutoff COUNT_CUTOFF COUNT_CUTOFF]
+
+Visualize Mutation Events
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -R R                  R plotting script path
+  -o OUT_DIR, --out_dir OUT_DIR
+                        output directory, default is plots_2020-08-14/
+  -i INPUT_FILES [INPUT_FILES ...], --input_files INPUT_FILES [INPUT_FILES ...]
+                        the output txt files from sam_dsbra_interface.py
+  --run_info RUN_INFO   the run_info csv files from sam_dsbra_interface.py
+  --align_stats         plot run_info.csv, plot alignment stats by Type
+  --all                 plot all types of plots
+  --mut_type            plot Mutation Event Frequency by Type
+  --del_len             plot Frequency of Deletions by Length
+  --del_seq             plot Sequences with Deletion Event
+  --ins_len             plot Frequency of Insertions by Length
+  --ins_seq             plot Sequences with Insertion Event
+  --repair_seq          plot top most common repair sequences
+  --aligned_mutations   plot frequency and aligned mutations
+  --ref_bottom REF_BOTTOM
+                        the start reference base to show aligned mutation
+                        events
+  --ref_top REF_TOP     the start reference base to show aligned mutation
+                        events
+  --break_index BREAK_INDEX
+                        the index of break site
+  --fts FTS             axis font size; default 6
+  --count_cutoff COUNT_CUTOFF COUNT_CUTOFF
+                        take probability cutoff, number of colonies,apply
+                        count cutoff to the summary tablebased on the poisson
+                        distribution;default 0.001, 300
+```
+
 _Example use:_<br>
 If we want to plot all types of plots: <br>
 ```
-./sam_dsbra_grapher_ling.py -i example_outputs/RIF1_NFR_output.txt -o example_outputs/ --all
+python sam_dsbra_grapher_ling.py --all -i example_outputs/RIF1_NFR_output.txt --break_index ${break_idx} --count_cutoff $poisson_cutoff $n_colony -o  example_outputs/ --run_info example_outputs/RIF1_NFR_first100k_global_aln_b${break_idx}_m${margin}_run_info.csv --fts 5
 ```
 The plots will be in `example_outputs` directory. <br>
 More options can be found in `./sam_dsbra_grapher_ling.py -h`, such as setting a count cutoff.
