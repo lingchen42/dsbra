@@ -28,9 +28,13 @@ source activate dsbra
 ```
 **5. Run the `sam_dsbra_interface_ling.py` to infer the repair patterns**
 ```
-usage: sam_dsbra_interface_ling.py [-h] -o OUT_DIR [-r REF_FA] [-q FASTQ]
-                                   [-b BREAK_INDEX] [-m MARGIN]
-                                   [-qm Q_REPAIR_MARGIN]
+usage: sam_dsbra_interface_ling.py [-h] -o OUT_DIR
+                                   [--align_mode {global,local}] --pcr_primer1
+                                   PCR_PRIMER1 --pcr_primer2 PCR_PRIMER2
+                                   --pcr_tail_seq PCR_TAIL_SEQ
+                                   [--min_len MIN_LEN] [--not_valid_reads]
+                                   [-r REF_FA] [-q FASTQ] [-b BREAK_INDEX]
+                                   [-m MARGIN] [-qm Q_REPAIR_MARGIN]
                                    [--last_margin LAST_MARGIN]
                                    [--count_cutoff COUNT_CUTOFF COUNT_CUTOFF]
                                    [--full_table]
@@ -41,6 +45,21 @@ optional arguments:
   -h, --help            show this help message and exit
   -o OUT_DIR, --out_dir OUT_DIR
                         output directory
+  --align_mode {global,local}
+                        choose the method for alignment
+  --pcr_primer1 PCR_PRIMER1
+                        primer seq, at the begining of the ref seq; will
+                        require the read to starts with this primer seq
+  --pcr_primer2 PCR_PRIMER2
+                        primer seq, at the end of the ref seq; will require
+                        last 4 nucleotide of the read is part of this primer
+                        seq
+  --pcr_tail_seq PCR_TAIL_SEQ
+                        added sequence for PCR;default
+                        ATCGGAAGAGCACACGTCTGAACTCCAGTCAC
+  --min_len MIN_LEN     miminal valid length (reads - pcr_tail_seq); default
+                        44bp
+  --not_valid_reads     output not valid reads
   -r REF_FA, --ref_fa REF_FA
                         path of the reference sequence fasta file
   -q FASTQ, --fastq FASTQ
@@ -69,7 +88,15 @@ optional arguments:
 ```
 _Example use:_
 ```
-python sam_dsbra_interface_ling.py -r example_data/nfr_ref_seq.fa -q example_data/RIF1_NFR.fastq -b 84 -m 5 -o rif1_nfr_wt
+ref_seq=NFR
+break_idx=85
+pcr_primer1=CGTAGGAAGTAGATTGTGTTAG
+pcr_primer2=-1
+pcr_tail_seq=ATCGGAAGAGCAACGTCTGAACTCCAGTCAC
+margin=10
+n_colony=300
+poisson_cutoff=0.001
+python sam_dsbra_interface_ling.py -o rif1_nfr_wt/ -q example_data/RIF1_NFR.fastq -b $break_idx -m $margin --ref example_data/nfr_ref_seq.fa --pcr_primer1 $pcr_primer1 --pcr_primer2 $pcr_primer2 --pcr_tail_seq $pcr_tail_seq --not_valid_reads --full_table
 ```
 
 The results will be in the `rif1_nfr_wt` directory as specified by `-o`,  including:
